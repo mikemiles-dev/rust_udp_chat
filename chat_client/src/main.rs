@@ -46,8 +46,7 @@ impl ChatClient {
         content: &str,
     ) -> Result<(), ChatClientError> {
         self.increment_message_id().await;
-        let content_owned = content.to_string().into_bytes();
-        let message = Message::new(message_type, &content_owned, self.message_id_counter);
+        let message = Message::new(message_type, content.to_string(), self.message_id_counter);
         let message_bytes: Vec<u8> = message
             .clone()
             .try_into()
@@ -87,14 +86,14 @@ impl ChatClient {
     }
 
     async fn run(&mut self) -> io::Result<()> {
-        let mut udp_buf = [0; 1024];
-
         // 2. Setup the Asynchronous User Input
         let stdin = tokio::io::stdin();
         let mut reader = tokio::io::BufReader::new(stdin);
         let mut input_line = String::new();
 
         loop {
+            let mut udp_buf = [0; 1024];
+
             // 3. Use tokio::select! to concurrently wait for either operation
             tokio::select! {
                 // Branch 1: UDP Socket Receive
