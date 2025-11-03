@@ -35,7 +35,7 @@ impl ChatServer {
     }
 
     async fn handle_message(&mut self, message: Message, src_addr: SocketAddr) {
-        let entry = self.message_queue.entry(src_addr).or_insert_with(Vec::new);
+        let entry = self.message_queue.entry(src_addr).or_default();
         entry.push(message);
     }
 
@@ -83,16 +83,15 @@ impl ChatServer {
                 return false;
             }
         };
-        if received_len != message_len + 4 {
+        if received_len != message_len {
             eprintln!(
                 "Warning: Received length {} does not match expected message length {} from {}",
-                received_len,
-                message_len + 4,
-                src_addr
+                received_len, message_len, src_addr
             );
-            return false;
+            false
+        } else {
+            true
         }
-        true
     }
 
     async fn run(&mut self) -> io::Result<()> {

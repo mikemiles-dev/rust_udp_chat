@@ -54,12 +54,12 @@ impl ChatClient {
         let message_bytes: Vec<u8> = message
             .clone()
             .try_into()
-            .map_err(|e| ChatClientError::MessageError(e))?;
+            .map_err(ChatClientError::MessageError)?;
         let sent_length = self
             .socket
             .send_to(&message_bytes, &self.server_addr)
             .await
-            .map_err(|e| ChatClientError::IoError(e))?;
+            .map_err(ChatClientError::IoError)?;
         println!(
             "Sent message of {} bytes to {}: {}",
             sent_length,
@@ -85,7 +85,7 @@ impl ChatClient {
     }
 
     async fn join_server(&mut self) -> Result<(), ChatClientError> {
-        let message = format!("{}", self.name);
+        let message = self.name.to_string();
         self.send_message(MessageTypes::Join, &message).await
     }
 
@@ -149,7 +149,7 @@ async fn main() -> io::Result<()> {
     client
         .join_server()
         .await
-        .expect(format!("Could not connect to: {}", chat_server).as_str());
+        .unwrap_or_else(|_| panic!("Could not connect to: {}", chat_server));
 
     client.run().await
 }
