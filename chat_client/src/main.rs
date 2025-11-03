@@ -46,7 +46,11 @@ impl ChatClient {
         content: &str,
     ) -> Result<(), ChatClientError> {
         self.increment_message_id().await;
-        let message = Message::new(message_type, content.to_string(), self.message_id_counter);
+        let message = Message::new(
+            message_type,
+            Some(content.to_string()),
+            self.message_id_counter,
+        );
         let message_bytes: Vec<u8> = message
             .clone()
             .try_into()

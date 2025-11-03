@@ -53,7 +53,19 @@ impl ChatServer {
                 let content = message.get_content().unwrap_or_default();
                 println!("**[Message]** {}", content);
             }
+            _ => (),
         }
+    }
+
+    async fn aknowledge_message(
+        socket: &UdpSocket,
+        message_id: &Message,
+        src_addr: &SocketAddr,
+    ) -> io::Result<()> {
+        let ack_message = Message::new(chat_shared::MessageTypes::Acknowledge, None, message_id.id);
+        let ack_bytes: Vec<u8> = ack_message.try_into().unwrap();
+        socket.send_to(&ack_bytes, src_addr).await?;
+        Ok(())
     }
 
     async fn run(&mut self) -> io::Result<()> {
