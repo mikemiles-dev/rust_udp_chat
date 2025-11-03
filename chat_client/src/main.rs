@@ -117,12 +117,21 @@ impl ChatClient {
         Some(input_line)
     }
 
-    async fn listen_for_messages(&mut self) -> io::Result<()> {
+    async fn listen_for_messages(&mut self) -> Result<(), ChatClientError> {
         let mut buf = [0; 1024];
         loop {
-            let (len, addr) = self.socket.recv_from(&mut buf).await?;
-            let msg = String::from_utf8_lossy(&buf[..len]);
-            println!("**[UDP]** Received {} bytes from {}: {}", len, addr, msg);
+            let (len, addr) = self
+                .socket
+                .recv_from(&mut buf)
+                .await
+                .map_err(ChatClientError::IoError)?;
+
+            let message = Message::try_from(&buf[..len]).map_err(ChatClientError::MessageError)?;
+
+            println!(
+                "**[UDP]** Received {} bytes from {}: {:?}",
+                len, addr, message
+            );
         }
     }
 
