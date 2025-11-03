@@ -12,6 +12,7 @@ struct ChatClient {
     message_id_counter: u8,
 }
 
+#[derive(Debug)]
 pub struct SentMessage {
     pub id: u8,
     pub length: usize,
@@ -43,14 +44,10 @@ impl ChatClient {
     async fn send_message(
         &mut self,
         message_type: MessageTypes,
-        content: &str,
+        content: Option<String>,
     ) -> Result<(), ChatClientError> {
         self.increment_message_id().await;
-        let message = Message::new(
-            message_type,
-            Some(content.to_string()),
-            self.message_id_counter,
-        );
+        let message = Message::new(message_type, content, self.message_id_counter);
         let message_bytes: Vec<u8> = message
             .clone()
             .try_into()
@@ -86,7 +83,7 @@ impl ChatClient {
 
     async fn join_server(&mut self) -> Result<(), ChatClientError> {
         let message = self.name.to_string();
-        self.send_message(MessageTypes::Join, &message).await
+        self.send_message(MessageTypes::Join, Some(message)).await
     }
 
     async fn get_user_input() -> Option<String> {
@@ -128,11 +125,29 @@ impl ChatClient {
 
             let message = Message::try_from(&buf[..len]).map_err(ChatClientError::MessageError)?;
 
-            println!(
-                "**[UDP]** Received {} bytes from {}: {:?}",
-                len, addr, message
-            );
+            match message.msg_type {
+                MessageTypes::Acknowledge => {
+                    self.sent_messages.retain(|msg| msg.id != message.id);
+                }
+                _ => {}
+            }
         }
+    }
+
+    async fn check_sent_messages(&mut self) {
+        let message_ids: Vec<u8> = self.sent_messages.iter().map(|msg| msg.id).collect();
+        for message_id in message_ids {
+            self.send_status_request().await.unwrap_or_else(|e| {
+                eprintln!(
+                    "Error sending status request for message ID {}: {:?}",
+                    message_id, e
+                )
+            });
+        }
+    }
+
+    async fn send_status_request(&mut self) -> Result<(), ChatClientError> {
+        self.send_message(MessageTypes::AskStatus, None).await
     }
 
     async fn run(&mut self) -> io::Result<()> {
@@ -145,13 +160,12 @@ impl ChatClient {
                         eprintln!("Error receiving UDP message: {:?}", e);
                     }
                 }
-
                 // Branch 2: User Input
                 result = ChatClient::get_user_input() => {
                     if let Some(input_line) = result {
                         let trimmed_input = input_line.trim();
                         if !trimmed_input.is_empty() {
-                            if let Err(e) = self.send_message(MessageTypes::ChatMessage, trimmed_input).await {
+                            if let Err(e) = self.send_message(MessageTypes::ChatMessage, Some(trimmed_input.to_string())).await {
                                 eprintln!("Error sending message: {:?}", e);
                             }
                         }
@@ -159,6 +173,10 @@ impl ChatClient {
                         // User chose to quit
                         return Ok(());
                     }
+                }
+                // Branch 3: Periodic Check for Sent Messages
+                _ = tokio::time::sleep(tokio::time::Duration::from_secs(5)) => {
+                    self.check_sent_messages().await;
                 }
             }
         }

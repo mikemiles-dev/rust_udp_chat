@@ -8,6 +8,7 @@ pub enum MessageError {
 #[derive(Debug, Clone, Copy)]
 pub enum MessageTypes {
     Acknowledge,
+    AskStatus,
     ChatMessage,
     Join,
     Leave,
@@ -20,10 +21,11 @@ impl TryFrom<u8> for MessageTypes {
     fn try_from(value: u8) -> Result<Self, Self::Error> {
         match value {
             0 => Ok(MessageTypes::Acknowledge),
-            1 => Ok(MessageTypes::ChatMessage),
-            2 => Ok(MessageTypes::Join),
-            3 => Ok(MessageTypes::Leave),
-            4 => Ok(MessageTypes::UserRename),
+            1 => Ok(MessageTypes::AskStatus),
+            2 => Ok(MessageTypes::ChatMessage),
+            3 => Ok(MessageTypes::Join),
+            4 => Ok(MessageTypes::Leave),
+            5 => Ok(MessageTypes::UserRename),
             _ => Err(MessageError::UnknownType),
         }
     }
@@ -64,10 +66,11 @@ impl TryFrom<Message> for Vec<u8> {
         buffer.push(message.id);
         buffer.push(match message.msg_type {
             MessageTypes::Acknowledge => 0,
-            MessageTypes::ChatMessage => 1,
-            MessageTypes::Join => 2,
-            MessageTypes::Leave => 3,
-            MessageTypes::UserRename => 4,
+            MessageTypes::AskStatus => 1,
+            MessageTypes::ChatMessage => 2,
+            MessageTypes::Join => 3,
+            MessageTypes::Leave => 4,
+            MessageTypes::UserRename => 5,
         });
         buffer.extend_from_slice(&message_length.to_be_bytes());
         if let Some(content) = message.content {
