@@ -1,6 +1,8 @@
 use std::io;
 use tokio::net::UdpSocket;
 
+use chat_shared::Message;
+
 pub struct ChatServer {
     socket: UdpSocket,
 }
@@ -15,18 +17,43 @@ impl ChatServer {
         let mut buf = [0; 1024]; // Buffer to hold incoming data
 
         loop {
-            let (len, addr) = self.socket.recv_from(&mut buf).await?;
+            tokio::select! {
+                result = self.socket.recv_from(&mut buf) => {
+                    let (len, addr) = result?;
+                    println!(
+                        "Received {} bytes from: {}",
+                        len,
+                        addr,
+                    );
 
-            println!(
-                "Received {} bytes from: {}: {}",
-                len,
-                addr,
-                String::from_utf8_lossy(&buf[..len])
-            );
+                    let message = match Message::try_from(&buf[..len]) {
+                        Ok(msg) => msg,
+                        Err(e) => {
+                            eprintln!("Failed to parse message: {:?}", e);
+                            continue;
+                        }
+                    };
 
-            // Optional: Echo the data back to the sender
-            let sent_len = self.socket.send_to(&buf[..len], addr).await?;
-            println!("Sent {} bytes back to: {}", sent_len, addr);
+                    match message.msg_type {
+                        chat_shared::MessageTypes::Join => {
+                            let content = message.get_content().unwrap_or_default();
+                            println!("**[Join]** {} has joined the chat.", content);
+                        }
+                        chat_shared::MessageTypes::Leave => {
+                            let content = message.get_content().unwrap_or_default();
+                            println!("**[Leave]** {} has left the chat.", content);
+                        }
+                        chat_shared::MessageTypes::ChatMessage => {
+                            let content = message.get_content().unwrap_or_default();
+                            println!("**[Message]** {}", content);
+                        }
+                    }
+
+                    // // Optional: Echo the data back to the sender
+                    // let sent_len = self.socket.send_to(&buf[..len], addr).await?;
+                    // println!("Sent {} bytes back to: {}", sent_len, addr);
+                }
+            }
         }
     }
 }

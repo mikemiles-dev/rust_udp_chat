@@ -42,6 +42,10 @@ impl<'a> Message<'a> {
             content,
         }
     }
+
+    pub fn get_content(&self) -> Result<String, std::str::Utf8Error> {
+        std::str::from_utf8(self.content).map(|s| s.to_string())
+    }
 }
 
 /// Protocol is: [1 byte id][1 byte type][2 byte content len][content bytes]
