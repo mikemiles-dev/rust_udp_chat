@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::{env, io};
-use tokio::net::UdpSocket;
 
-use chat_shared::Message;
+use chat_shared::message::{ChatMessage, MessageTypes};
+use chat_shared::udp_wrapper::UdpWrapper;
 
 pub struct ConnectedClient {
     pub addr: String,
@@ -11,97 +11,37 @@ pub struct ConnectedClient {
 }
 
 pub struct ChatServer {
-    socket: UdpSocket,
-    message_queue: HashMap<SocketAddr, Vec<Message>>,
+    pub reliable_socket: UdpWrapper,
 }
 
 impl ChatServer {
     async fn new(bind_addr: &str) -> io::Result<Self> {
-        let socket = UdpSocket::bind(bind_addr).await?;
-        Ok(ChatServer {
-            socket,
-            message_queue: HashMap::new(),
-        })
+        let reliable_socket = UdpWrapper::new(bind_addr).await?;
+        Ok(ChatServer { reliable_socket })
     }
 
-    async fn process_message_queue(&mut self) -> io::Result<()> {
-        for (addr, messages) in self.message_queue.iter_mut() {
-            messages.sort_by(|a, b| a.id.cmp(&b.id));
-            while let Some(message) = messages.pop() {
-                Self::aknowledge_message(&self.socket, &message, addr).await?;
-                Self::process_message(message, addr).await;
-            }
-        }
-        Ok(())
-    }
-
-    async fn handle_message(&mut self, message: Message, src_addr: SocketAddr) {
-        let entry = self.message_queue.entry(src_addr).or_default();
-        entry.push(message);
-    }
-
-    async fn process_message(message: Message, src_addr: &SocketAddr) {
+    async fn process_message(&mut self, message: ChatMessage, src_addr: SocketAddr) {
         match message.msg_type {
-            chat_shared::MessageTypes::Join => {
+            MessageTypes::Join => {
                 let content = message.get_content().unwrap_or_default();
                 println!("**[Join]** {} has joined the chat.", content);
             }
-            chat_shared::MessageTypes::Leave => {
+            MessageTypes::Leave => {
                 let content = message.get_content().unwrap_or_default();
                 println!("**[Leave]** {} has left the chat.", content);
             }
-            chat_shared::MessageTypes::ChatMessage => {
+            MessageTypes::ChatMessage => {
                 let content = message.get_content().unwrap_or_default();
-                println!("**[Message]** {}", content);
+                println!("**[Message]** {} says: {}", src_addr, content);
             }
-            chat_shared::MessageTypes::AskStatus => {
-                println!("**[Status Request]** from {}", src_addr);
-            }
-            chat_shared::MessageTypes::Acknowledge => {
-                println!("**[Acknowledge]** from {}", src_addr);
-            }
-            chat_shared::MessageTypes::UserRename => {
+            MessageTypes::UserRename => {
                 let content = message.get_content().unwrap_or_default();
-                println!("**[Rename]** User renamed to {}.", content);
+                println!(
+                    "**[Rename]** {} has changed their name to {}.",
+                    src_addr, content
+                );
             }
             _ => (),
-        }
-    }
-
-    async fn aknowledge_message(
-        socket: &UdpSocket,
-        message_id: &Message,
-        src_addr: &SocketAddr,
-    ) -> io::Result<()> {
-        let ack_message = Message::new(chat_shared::MessageTypes::Acknowledge, None, message_id.id);
-        let ack_bytes: Vec<u8> = ack_message.try_into().unwrap();
-        socket.send_to(&ack_bytes, src_addr).await?;
-        Ok(())
-    }
-
-    async fn verify_message(
-        received_len: usize,
-        message_len: usize,
-        src_addr: &SocketAddr,
-    ) -> bool {
-        let message_len = match message_len.checked_add(4) {
-            Some(len) => len,
-            None => {
-                eprintln!(
-                    "Warning: Message length overflow for message from {}",
-                    src_addr
-                );
-                return false;
-            }
-        };
-        if received_len != message_len {
-            eprintln!(
-                "Warning: Received length {} does not match expected message length {} from {}",
-                received_len, message_len, src_addr
-            );
-            false
-        } else {
-            true
         }
     }
 
@@ -111,29 +51,16 @@ impl ChatServer {
 
         loop {
             tokio::select! {
-                result = self.socket.recv_from(&mut buf) => {
-                    let (len, addr) = result?;
+                result = self.reliable_socket.receive_data_and_ack() => {
 
-                    let message = match Message::try_from(&buf[..len]) {
-                        Ok(msg) => msg,
-                        Err(e) => {
-                            eprintln!("Failed to parse message: {:?}", e);
-                            continue;
-                        }
-                    };
+                    let (data, socket_addr) = result?;
 
-                    Self::verify_message(len, message.length, &addr).await;
+                    let chat_message = ChatMessage::from(data.as_slice());
 
-                    self.handle_message(message, addr).await;
-
+                    self.process_message(chat_message, socket_addr).await;
                     // // Optional: Echo the data back to the sender
                     // let sent_len = self.socket.send_to(&buf[..len], addr).await?;
                     // println!("Sent {} bytes back to: {}", sent_len, addr);
-                }
-                _ = interval.tick() => {
-                    if let Err(e) = self.process_message_queue().await {
-                        eprintln!("Error processing message queue: {}", e);
-                    }
                 }
             }
         }

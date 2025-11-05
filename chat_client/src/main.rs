@@ -1,89 +1,46 @@
 use std::io::{self, Write};
+use std::net::{AddrParseError, SocketAddr};
 use tokio::io::AsyncBufReadExt;
-use tokio::net::UdpSocket;
 
-use chat_shared::{Message, MessageError, MessageTypes};
+use chat_shared::message::{ChatMessage, MessageTypes};
+use chat_shared::udp_wrapper::UdpWrapper;
 
 struct ChatClient {
-    socket: UdpSocket,
-    name: String,
-    server_addr: String,
-    sent_messages: Vec<SentMessage>,
-    message_id_counter: u8,
-}
-
-#[derive(Debug)]
-pub struct SentMessage {
-    pub id: u8,
-    pub length: usize,
+    udp_wrapper: UdpWrapper,
+    server_addr: SocketAddr,
+    chat_name: String,
 }
 
 #[derive(Debug)]
 pub enum ChatClientError {
+    InvalidAddress(AddrParseError),
     IoError(io::Error),
     JoinError(String),
-    MessageError(MessageError),
+    MessageError(tokio::io::Error),
 }
 
 impl ChatClient {
-    async fn new(server_addr: &str, name: String) -> io::Result<Self> {
-        let socket = UdpSocket::bind("0.0.0.0:0").await?;
+    async fn new(server_addr: &str, name: String) -> Result<Self, ChatClientError> {
+        let reliable_socket = UdpWrapper::new("0.0.0.0:0")
+            .await
+            .map_err(ChatClientError::IoError)?;
+        let server_addr = server_addr
+            .parse::<SocketAddr>()
+            .map_err(ChatClientError::InvalidAddress)?;
         Ok(ChatClient {
-            socket,
-            name,
-            server_addr: server_addr.to_string(),
-            sent_messages: vec![],
-            message_id_counter: 0,
+            udp_wrapper: reliable_socket,
+            server_addr,
+            chat_name: name,
         })
     }
 
-    async fn increment_message_id(&mut self) {
-        self.message_id_counter = self.message_id_counter.checked_add(1).unwrap_or(0);
-    }
-
-    async fn send_message(
-        &mut self,
-        message_type: MessageTypes,
-        content: Option<String>,
-    ) -> Result<(), ChatClientError> {
-        self.increment_message_id().await;
-        let message = Message::new(message_type, content, self.message_id_counter);
-        let message_bytes: Vec<u8> = message
-            .clone()
-            .try_into()
-            .map_err(ChatClientError::MessageError)?;
-        let sent_length = self
-            .socket
-            .send_to(&message_bytes, &self.server_addr)
-            .await
-            .map_err(ChatClientError::IoError)?;
-        println!(
-            "Sent message of {} bytes to {}: {}",
-            sent_length,
-            self.server_addr,
-            message_bytes.len()
-        );
-        if sent_length != message_bytes.len() {
-            Err(ChatClientError::JoinError(
-                format!(
-                    "Warning: Sent length {} does not match message length {}",
-                    sent_length,
-                    message_bytes.len(),
-                )
-                .to_string(),
-            ))
-        } else {
-            self.sent_messages.push(SentMessage {
-                id: message.id,
-                length: message.length,
-            });
-            Ok(())
-        }
-    }
-
     async fn join_server(&mut self) -> Result<(), ChatClientError> {
-        let message = self.name.to_string();
-        self.send_message(MessageTypes::Join, Some(message)).await
+        let message = self.chat_name.to_string();
+        self.udp_wrapper
+            .send_message_reliable(&message.as_bytes(), self.server_addr)
+            .await
+            .map_err(ChatClientError::MessageError)?;
+        Ok(())
     }
 
     async fn get_user_input() -> Option<String> {
@@ -115,46 +72,36 @@ impl ChatClient {
     }
 
     async fn listen_for_messages(&mut self) -> Result<(), ChatClientError> {
-        let mut buf = [0; 1024];
         loop {
-            let (len, addr) = self
-                .socket
-                .recv_from(&mut buf)
+            let (data, _) = self
+                .udp_wrapper
+                .receive_data_and_ack()
                 .await
                 .map_err(ChatClientError::IoError)?;
 
-            let message = Message::try_from(&buf[..len]).map_err(ChatClientError::MessageError)?;
+            let chat_message = ChatMessage::from(data.as_slice());
 
-            match message.msg_type {
-                MessageTypes::Acknowledge => {
-                    self.sent_messages.retain(|msg| msg.id != message.id);
+            match chat_message.msg_type {
+                MessageTypes::ChatMessage => {
+                    if let Some(content) = chat_message.content {
+                        println!("**[Message]** {}", content);
+                    }
                 }
-                _ => {}
+                _ => {
+                    println!(
+                        "**[Message]** Received non-chat message: {:?}",
+                        chat_message
+                    );
+                }
             }
         }
-    }
-
-    async fn check_sent_messages(&mut self) {
-        let message_ids: Vec<u8> = self.sent_messages.iter().map(|msg| msg.id).collect();
-        for message_id in message_ids {
-            self.send_status_request().await.unwrap_or_else(|e| {
-                eprintln!(
-                    "Error sending status request for message ID {}: {:?}",
-                    message_id, e
-                )
-            });
-        }
-    }
-
-    async fn send_status_request(&mut self) -> Result<(), ChatClientError> {
-        self.send_message(MessageTypes::AskStatus, None).await
     }
 
     async fn run(&mut self) -> io::Result<()> {
         loop {
             // 3. Use tokio::select! to concurrently wait for either operation
             tokio::select! {
-                // Branch 1: UDP Socket Receive
+                // Branch 1: Receive
                 result = self.listen_for_messages() => {
                     if let Err(e) = result {
                         eprintln!("Error receiving UDP message: {:?}", e);
@@ -165,18 +112,14 @@ impl ChatClient {
                     if let Some(input_line) = result {
                         let trimmed_input = input_line.trim();
                         if !trimmed_input.is_empty() {
-                            if let Err(e) = self.send_message(MessageTypes::ChatMessage, Some(trimmed_input.to_string())).await {
-                                eprintln!("Error sending message: {:?}", e);
-                            }
+                            self.udp_wrapper
+                                .send_message_reliable(&trimmed_input.as_bytes(), self.server_addr)
+                                .await?;
                         }
                     } else {
                         // User chose to quit
                         return Ok(());
                     }
-                }
-                // Branch 3: Periodic Check for Sent Messages
-                _ = tokio::time::sleep(tokio::time::Duration::from_secs(5)) => {
-                    self.check_sent_messages().await;
                 }
             }
         }
@@ -186,7 +129,14 @@ impl ChatClient {
 #[tokio::main]
 async fn main() -> io::Result<()> {
     let (chat_server, chat_name) = prompt_server_info()?;
-    let mut client = ChatClient::new(&chat_server, chat_name).await?;
+    let mut client = ChatClient::new(&chat_server, chat_name)
+        .await
+        .unwrap_or_else(|e| {
+            panic!(
+                "Failed to create ChatClient for server {}: {:?}",
+                chat_server, e
+            )
+        });
 
     client
         .join_server()
