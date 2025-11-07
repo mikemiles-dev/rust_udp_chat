@@ -1,5 +1,5 @@
-use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::{env, io};
 
 use chat_shared::message::{ChatMessage, MessageTypes};
@@ -11,12 +11,16 @@ pub struct ConnectedClient {
 }
 
 pub struct ChatServer {
-    pub reliable_socket: UdpWrapper,
+    pub reliable_socket: Arc<UdpWrapper>,
 }
 
 impl ChatServer {
     async fn new(bind_addr: &str) -> io::Result<Self> {
-        let reliable_socket = UdpWrapper::new(bind_addr).await?;
+        let reliable_socket = UdpWrapper::new(bind_addr)?;
+
+        tokio::spawn(reliable_socket.clone().run_receiver_loop());
+        tokio::spawn(reliable_socket.clone().run_retransmitter_loop());
+
         Ok(ChatServer { reliable_socket })
     }
 
@@ -46,21 +50,10 @@ impl ChatServer {
     }
 
     async fn run(&mut self) -> io::Result<()> {
-        let mut buf = [0; 1024]; // Buffer to hold incoming data
-        let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(5));
-
         loop {
-            tokio::select! {
-                result = self.reliable_socket.receive_data_and_ack() => {
-
-                    let (data, socket_addr) = result?;
-
-                    let chat_message = ChatMessage::from(data.as_slice());
-
-                    self.process_message(chat_message, socket_addr).await;
-                    // // Optional: Echo the data back to the sender
-                    // let sent_len = self.socket.send_to(&buf[..len], addr).await?;
-                    // println!("Sent {} bytes back to: {}", sent_len, addr);
+            if let Some(peer_addr) = self.reliable_socket.get_first_peer_addr().await {
+                while let Some(msg) = self.reliable_socket.poll_ready_message(&peer_addr).await {
+                    println!("[SERVER] DELIVERED: {}", String::from_utf8_lossy(&msg));
                 }
             }
         }

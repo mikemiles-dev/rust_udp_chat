@@ -1,12 +1,13 @@
 use std::io::{self, Write};
 use std::net::{AddrParseError, SocketAddr};
+use std::sync::Arc;
 use tokio::io::AsyncBufReadExt;
 
 use chat_shared::message::{ChatMessage, MessageTypes};
 use chat_shared::udp_wrapper::UdpWrapper;
 
 struct ChatClient {
-    udp_wrapper: UdpWrapper,
+    udp_wrapper: Arc<UdpWrapper>,
     server_addr: SocketAddr,
     chat_name: String,
 }
@@ -21,14 +22,16 @@ pub enum ChatClientError {
 
 impl ChatClient {
     async fn new(server_addr: &str, name: String) -> Result<Self, ChatClientError> {
-        let reliable_socket = UdpWrapper::new("0.0.0.0:0")
-            .await
-            .map_err(ChatClientError::IoError)?;
+        let udp_wrapper = UdpWrapper::new("0.0.0.0:0").map_err(ChatClientError::IoError)?;
         let server_addr = server_addr
             .parse::<SocketAddr>()
             .map_err(ChatClientError::InvalidAddress)?;
+
+        tokio::spawn(udp_wrapper.clone().run_receiver_loop());
+        tokio::spawn(udp_wrapper.clone().run_retransmitter_loop());
+
         Ok(ChatClient {
-            udp_wrapper: reliable_socket,
+            udp_wrapper,
             server_addr,
             chat_name: name,
         })
@@ -37,7 +40,7 @@ impl ChatClient {
     async fn join_server(&mut self) -> Result<(), ChatClientError> {
         let message = self.chat_name.to_string();
         self.udp_wrapper
-            .send_message_reliable(&message.as_bytes(), self.server_addr)
+            .send_data(self.server_addr, message.as_bytes().to_vec())
             .await
             .map_err(ChatClientError::MessageError)?;
         Ok(())
@@ -73,11 +76,10 @@ impl ChatClient {
 
     async fn listen_for_messages(&mut self) -> Result<(), ChatClientError> {
         loop {
-            let (data, _) = self
-                .udp_wrapper
-                .receive_data_and_ack()
-                .await
-                .map_err(ChatClientError::IoError)?;
+            let data = match self.udp_wrapper.poll_ready_message(&self.server_addr).await {
+                Some(data) => data,
+                None => continue,
+            };
 
             let chat_message = ChatMessage::from(data.as_slice());
 
@@ -113,7 +115,7 @@ impl ChatClient {
                         let trimmed_input = input_line.trim();
                         if !trimmed_input.is_empty() {
                             self.udp_wrapper
-                                .send_message_reliable(&trimmed_input.as_bytes(), self.server_addr)
+                                .send_data(self.server_addr, trimmed_input.as_bytes().to_vec())
                                 .await?;
                         }
                     } else {
