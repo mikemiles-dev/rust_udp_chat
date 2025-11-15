@@ -3,7 +3,7 @@ resolver = "2"
 members = [ "chat_server", "chat_client", "chat_shared"]
 
 [workspace.package]
-description = "Rust Udp Chat Application using Tokio"
+description = "Rust Chat Application using Tokio over TCP"
 edition = "2024"
 version = "0.1.0"
 authors = ["michael.mileusnich@gmail.com"]
