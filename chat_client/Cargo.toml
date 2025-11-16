@@ -7,5 +7,7 @@ authors.workspace = true
 readme.workspace = true
 
 [dependencies]
-tokio.workspace = true
 chat_shared.workspace = true
+chrono.workspace = true
+colored.workspace = true
+tokio.workspace = true

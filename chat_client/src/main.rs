@@ -1,10 +1,124 @@
 use chat_shared::network::TcpMessageHandler;
 use std::io::{self, Write};
 use std::net::{AddrParseError, SocketAddr};
-use tokio::io::AsyncBufReadExt;
 
 use chat_shared::message::{ChatMessage, ChatMessageError, MessageTypes};
 use tokio::net::TcpStream;
+
+// Centralized logging module
+mod logger {
+    use chrono::Local;
+    use colored::Colorize;
+
+    fn get_timestamp() -> String {
+        Local::now().format("%H:%M:%S").to_string()
+    }
+
+    pub fn log_info(message: &str) {
+        println!(
+            "{} {} {}",
+            format!("[{}]", get_timestamp()).dimmed(),
+            "[INFO]".cyan().bold(),
+            message
+        );
+    }
+
+    pub fn log_success(message: &str) {
+        println!(
+            "{} {} {}",
+            format!("[{}]", get_timestamp()).dimmed(),
+            "[OK]".green().bold(),
+            message
+        );
+    }
+
+    pub fn log_error(message: &str) {
+        eprintln!(
+            "{} {} {}",
+            format!("[{}]", get_timestamp()).dimmed(),
+            "[ERROR]".red().bold(),
+            message
+        );
+    }
+
+    pub fn log_warning(message: &str) {
+        println!(
+            "{} {} {}",
+            format!("[{}]", get_timestamp()).dimmed(),
+            "[WARN]".yellow().bold(),
+            message
+        );
+    }
+
+    pub fn log_system(message: &str) {
+        println!(
+            "{} {} {}",
+            format!("[{}]", get_timestamp()).dimmed(),
+            "[SYSTEM]".magenta().bold(),
+            message
+        );
+    }
+
+    pub fn log_chat(message: &str) {
+        // Try to parse username from message format "username: message"
+        if let Some((username, msg)) = message.split_once(": ") {
+            let colored_username = colorize_username(username);
+            println!(
+                "{} {} {}: {}",
+                format!("[{}]", get_timestamp()).dimmed(),
+                "[CHAT]".white().bold(),
+                colored_username,
+                msg
+            );
+        } else {
+            // Fallback if format doesn't match
+            println!(
+                "{} {} {}",
+                format!("[{}]", get_timestamp()).dimmed(),
+                "[CHAT]".white().bold(),
+                message
+            );
+        }
+    }
+
+    fn colorize_username(username: &str) -> colored::ColoredString {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
+        // Generate a consistent hash for the username
+        let mut hasher = DefaultHasher::new();
+        username.hash(&mut hasher);
+        let hash = hasher.finish();
+
+        // Use the hash to select a color
+        let colors = [
+            colored::Color::Red,
+            colored::Color::Green,
+            colored::Color::Yellow,
+            colored::Color::Blue,
+            colored::Color::Magenta,
+            colored::Color::Cyan,
+            colored::Color::BrightRed,
+            colored::Color::BrightGreen,
+            colored::Color::BrightYellow,
+            colored::Color::BrightBlue,
+            colored::Color::BrightMagenta,
+            colored::Color::BrightCyan,
+        ];
+
+        let color_index = (hash as usize) % colors.len();
+        username.color(colors[color_index]).bold()
+    }
+
+    pub fn _log_debug(message: &str) {
+        println!(
+            "{} {} {}",
+            format!("[{}]", get_timestamp()).dimmed(),
+            "[DEBUG]".blue().bold(),
+            message
+        );
+    }
+}
 
 struct ChatClient {
     connection: TcpStream,
@@ -18,6 +132,33 @@ pub enum ChatClientError {
     JoinError(String),
     TokioError(tokio::io::Error),
     ChatMessageError(ChatMessageError),
+}
+
+pub enum UserInput {
+    Message(String),
+    Quit,
+}
+
+#[derive(Debug)]
+pub enum UserInputError {
+    InvalidCommand,
+    IoError(io::Error),
+}
+
+impl TryFrom<&str> for UserInput {
+    type Error = UserInputError;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        let trimmed = value.trim();
+        let command = trimmed
+            .split(" ")
+            .next()
+            .ok_or(UserInputError::InvalidCommand)?;
+        match command {
+            "/quit" => Ok(UserInput::Quit),
+            _ => Ok(UserInput::Message(trimmed.to_string())),
+        }
+    }
 }
 
 impl ChatClient {
@@ -46,94 +187,139 @@ impl ChatClient {
         Ok(())
     }
 
-    async fn get_user_input() -> Option<String> {
-        let stdin = tokio::io::stdin();
-        let mut reader = tokio::io::BufReader::new(stdin);
+    async fn get_user_input<R>(reader: &mut R) -> Result<UserInput, UserInputError>
+    where
+        R: tokio::io::AsyncBufReadExt + Unpin,
+    {
         let mut input_line = String::new();
 
         match reader.read_line(&mut input_line).await {
-            Ok(0) => {
-                // EOF (e.g., Ctrl+D or stream closed)
-                println!("**[Input]** EOF received. Exiting...");
-            }
-            Ok(_) => {
-                let trimmed_input = input_line.trim();
-                println!("**[Input]** You typed: {}", trimmed_input);
-
-                if trimmed_input.eq_ignore_ascii_case("quit") {
-                    println!("**[Input]** Quitting application.");
-                    return None;
-                }
-                // IMPORTANT: Clear the buffer for the next read
-                input_line.clear();
-            }
-            Err(e) => {
-                eprintln!("Input error: {}", e);
-            }
+            Ok(0) => Ok(UserInput::Quit),
+            Ok(_) => UserInput::try_from(input_line.as_str()),
+            Err(e) => Err(UserInputError::IoError(e)),
         }
-        Some(input_line)
     }
 
     async fn handle_message(&mut self, message: ChatMessage) {
         match message.msg_type {
             MessageTypes::Join => {
                 if let Some(content) = message.content_as_string() {
-                    println!(">>> {} has joined the chat.", content);
+                    logger::log_system(&format!("{} has joined the chat", content));
                 } else {
-                    eprintln!("Received invalid UTF-8 join message.");
+                    logger::log_error("Received invalid UTF-8 join message");
                 }
             }
             MessageTypes::Leave => {
                 if let Some(content) = message.content_as_string() {
-                    println!(">>> {} has left the chat.", content);
+                    logger::log_system(&format!("{} has left the chat", content));
                 } else {
-                    eprintln!("Received invalid UTF-8 leave message.");
+                    logger::log_error("Received invalid UTF-8 leave message");
                 }
             }
             MessageTypes::UserRename => {
                 if let Some(content) = message.content_as_string() {
-                    println!(">>> You have been renamed to '{}'.", content);
+                    logger::log_success(&format!("You have been renamed to '{}'", content));
                     self.chat_name = content;
                 } else {
-                    eprintln!("Received invalid UTF-8 rename message.");
+                    logger::log_error("Received invalid UTF-8 rename message");
+                }
+            }
+            MessageTypes::ChatMessage => {
+                if let Some(content) = message.content_as_string() {
+                    // Check if message is from current user
+                    if let Some((username, _)) = content.split_once(": ") {
+                        // Only display if it's not from ourselves
+                        if username != self.chat_name {
+                            logger::log_chat(&content);
+                        }
+                    } else {
+                        // Fallback: display if format doesn't match
+                        logger::log_chat(&content);
+                    }
+                } else {
+                    logger::log_error("Received invalid UTF-8 chat message");
                 }
             }
             _ => {
-                eprintln!("Received unknown message type: {:?}", message.msg_type);
+                logger::log_warning(&format!(
+                    "Received unknown message type: {:?}",
+                    message.msg_type
+                ));
             }
         }
     }
 
+    async fn handle_user_input(&mut self, user_input: UserInput) -> Result<(), ChatClientError> {
+        match user_input {
+            UserInput::Message(msg) => {
+                let chat_message =
+                    ChatMessage::try_new(MessageTypes::ChatMessage, Some(msg.into_bytes()))
+                        .map_err(ChatClientError::ChatMessageError)?;
+                self.send_message_chunked(chat_message)
+                    .await
+                    .map_err(ChatClientError::TokioError)?;
+                Ok(())
+            }
+            UserInput::Quit => {
+                logger::log_info("Quitting chat");
+                Ok(())
+            }
+        }
+    }
+
+    fn display_prompt(&self) -> io::Result<()> {
+        use colored::Colorize;
+        print!("{} ", self.chat_name.bright_cyan().bold());
+        io::stdout().flush()
+    }
+
     async fn run(&mut self) -> io::Result<()> {
+        let stdin = tokio::io::stdin();
+        let mut reader = tokio::io::BufReader::new(stdin);
+
+        // Display initial prompt
+        self.display_prompt()?;
+
         loop {
             // 3. Use tokio::select! to concurrently wait for either operation
             tokio::select! {
                 // Branch 1: Receive
                 result = self.read_message_chunked() => {
                     match result {
-                        Ok(message) => self.handle_message(message).await,
+                        Ok(message) => {
+                            self.handle_message(message).await;
+                            // Redisplay prompt after receiving a message
+                            self.display_prompt()?;
+                        }
                         Err(chat_shared::network::TcpMessageHandlerError::IoError(e)) => {
-                            eprintln!("IO error reading from server: {:?}", e);
+                            logger::log_error(&format!("IO error reading from server: {:?}", e));
                             return Err(e);
                         }
                         Err(chat_shared::network::TcpMessageHandlerError::Disconnect) => {
-                            println!("Disconnected from server.");
+                            logger::log_warning("Disconnected from server");
                             return Ok(());
                         }
                     }
                 }
                 // Branch 2: User Input
-                result = ChatClient::get_user_input() => {
-                    if let Some(_input_line) = result {
-                        //let trimmed_input = input_line.trim();
-                        // if !trimmed_input.is_empty() {
-                        //     self.udp_wrapper
-                        //         .send_data(self.server_addr, trimmed_input.as_bytes().to_vec())
-                        //         .await?;
-                        // }
-                    } else {
-                        // User chose to quit
-                        return Ok(());
+                result = ChatClient::get_user_input(&mut reader) => {
+                    match result {
+                        Ok(UserInput::Quit) => {
+                            logger::log_info("Quitting chat");
+                            return Ok(());
+                        }
+                        Ok(user_input) => {
+                            if let Err(e) = self.handle_user_input(user_input).await {
+                                logger::log_error(&format!("Error handling input: {e:?}"));
+                                // Only display prompt after error
+                                self.display_prompt()?;
+                            }
+                        }
+                        Err(e) => {
+                            logger::log_error(&format!("Input error: {e:?}"));
+                            // Display prompt again after error
+                            self.display_prompt()?;
+                        }
                     }
                 }
             }
@@ -172,11 +358,11 @@ fn prompt_server_info() -> io::Result<(String, String)> {
     let name_default = "Guest";
     let mut chat_server = String::new();
     let mut chat_name = String::new();
-    println!("Press Enter Chat Server (default: {}):", server_default);
+    logger::log_info(&format!("Enter Chat Server (default: {}):", server_default));
     io::stdout().flush()?;
     io::stdin().read_line(&mut chat_server)?;
     let chat_server = chat_server.trim();
-    println!("Press Enter Chat Name (default: {}):", name_default);
+    logger::log_info(&format!("Enter Chat Name (default: {}):", name_default));
     io::stdout().flush()?;
     io::stdin().read_line(&mut chat_name)?;
     let chat_name = chat_name.trim();
