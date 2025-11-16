@@ -97,11 +97,8 @@ impl UserConnection {
                 // Branch 2: Broadcast to other clients
                 result = rx.recv() => {
                     match result {
-                        Ok((msg, src_addr)) => {
-                            // Avoid sending the message back to the sender
-                            if src_addr != self.addr {
-                                self.send_message_chunked(msg).await.map_err(UserConnectionError::IoError)?;
-                            }
+                        Ok((msg, _src_addr)) => {
+                            self.send_message_chunked(msg).await.map_err(UserConnectionError::IoError)?;
                         }
                         Err(e) => {
                             eprintln!("Broadcast receive error for {}: {:?}", self.addr, e);
@@ -129,9 +126,36 @@ impl UserConnection {
             MessageTypes::Join => {
                 self.process_join(message.content_as_string()).await?;
             }
+            MessageTypes::ChatMessage => {
+                self.process_chat_message(message.content_as_string())
+                    .await?;
+            }
             _ => (),
         }
         Ok(())
+    }
+
+    pub async fn process_chat_message(
+        &mut self,
+        content: Option<String>,
+    ) -> Result<(), UserConnectionError> {
+        if content.is_none() {
+            return Err(UserConnectionError::InvalidMessage);
+        }
+        let chat_content = content.unwrap();
+        if let Some(chat_name) = &self.chat_name {
+            let full_message = format!("{}: {}", chat_name, chat_content);
+            let broadcast_message =
+                ChatMessage::try_new(MessageTypes::ChatMessage, Some(full_message.into_bytes()))
+                    .map_err(|_| UserConnectionError::InvalidMessage)?;
+            self.tx
+                .send((broadcast_message, self.addr))
+                .map_err(UserConnectionError::BroadcastError)?;
+            Ok(())
+        } else {
+            eprintln!("User at {} sent chat message before joining.", self.addr);
+            Err(UserConnectionError::InvalidMessage)
+        }
     }
 
     pub async fn process_join(
