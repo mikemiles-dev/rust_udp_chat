@@ -10,11 +10,6 @@ use chat_shared::message::ChatMessage;
 mod user_connection;
 use user_connection::UserConnection;
 
-pub struct ConnectedClient {
-    pub addr: String,
-    pub name: String,
-}
-
 pub struct ChatServer {
     listener: TcpListener,
     broadcaster: broadcast::Sender<(ChatMessage, SocketAddr)>,
@@ -23,7 +18,7 @@ pub struct ChatServer {
 
 impl ChatServer {
     async fn new(bind_addr: &str, max_clients: usize) -> io::Result<Self> {
-        let (tx, _rx) = broadcast::channel(max_clients); // 100 is the capacity
+        let (tx, _rx) = broadcast::channel(max_clients);
         let listener = TcpListener::bind(bind_addr).await?;
 
         Ok(ChatServer {

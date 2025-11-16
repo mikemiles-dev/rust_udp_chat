@@ -15,6 +15,7 @@ pub struct UserConnection {
     addr: SocketAddr,
     tx: broadcast::Sender<(ChatMessage, SocketAddr)>,
     connected_clients: Arc<RwLock<HashSet<String>>>,
+    chat_name: Option<String>,
 }
 
 impl TcpMessageHandler for UserConnection {
@@ -54,6 +55,7 @@ impl UserConnection {
             addr,
             tx,
             connected_clients,
+            chat_name: None,
         }
     }
 
@@ -77,7 +79,17 @@ impl UserConnection {
                             break;
                         }
                         Err(TcpMessageHandlerError::Disconnect) => {
-                            println!("Client {} disconnected.", self.addr);
+                            if let Some(chat_name) = &self.chat_name {
+                                let mut clients = self.connected_clients.write().await;
+                                clients.remove(chat_name);
+                                let leave_message = ChatMessage::try_new(
+                                    MessageTypes::Leave,
+                                    Some(chat_name.clone().into_bytes()),
+                                ).map_err(|_| UserConnectionError::InvalidMessage)?;
+                                self.tx.send((leave_message, self.addr))
+                                    .map_err(UserConnectionError::BroadcastError)?;
+                                println!(">>> User '{}' has left the chat.", chat_name);
+                            }
                             break;
                         }
                     };
@@ -132,7 +144,7 @@ impl UserConnection {
         let connected_clients = self.connected_clients.clone();
         if let Some(content) = username {
             let mut clients = connected_clients.write().await;
-            if !clients.insert(content.clone()) {
+            self.chat_name = if !clients.insert(content.clone()) {
                 eprintln!(">>> User '{}' already exists. Renaming...", content);
                 let new_name = self.randomize_username(&content);
                 if !clients.insert(new_name.clone()) {
@@ -148,18 +160,21 @@ impl UserConnection {
                 self.send_message_chunked(rename_message)
                     .await
                     .map_err(UserConnectionError::IoError)?;
-                let join_message =
-                    ChatMessage::try_new(MessageTypes::Join, Some(new_name.clone().into_bytes()))
-                        .map_err(|_| UserConnectionError::InvalidMessage)?;
-                self.tx
-                    .send((join_message, self.addr))
-                    .map_err(UserConnectionError::BroadcastError)?;
-                println!(">>> User '{}' has joined the chat.", new_name);
+                Some(new_name)
             } else {
-                println!(">>> {} has joined the chat.", content);
+                Some(content)
             }
         } else {
             return Err(UserConnectionError::InvalidMessage);
+        }
+        if let Some(chat_name) = &self.chat_name {
+            let join_message =
+                ChatMessage::try_new(MessageTypes::Join, Some(chat_name.clone().into_bytes()))
+                    .map_err(|_| UserConnectionError::InvalidMessage)?;
+            self.tx
+                .send((join_message, self.addr))
+                .map_err(UserConnectionError::BroadcastError)?;
+            println!(">>> User '{}' has joined the chat.", chat_name);
         }
         Ok(())
     }
