@@ -1,170 +1,38 @@
 use chat_shared::logger;
 use chat_shared::message::{ChatMessage, MessageTypes};
-use chat_shared::network::{TcpMessageHandler, TcpMessageHandlerError};
+use chat_shared::network::TcpMessageHandler;
 use rand::Rng;
 use std::collections::HashSet;
-use std::io;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 use tokio::net::TcpStream;
 use tokio::sync::{RwLock, broadcast};
 
+use super::error::UserConnectionError;
+use super::rate_limiting::RateLimiter;
+
+// Helper struct to implement TcpMessageHandler for TcpStream
+struct StreamWrapper<'a> {
+    stream: &'a mut TcpStream,
+}
+
+impl<'a> TcpMessageHandler for StreamWrapper<'a> {
+    fn get_stream(&mut self) -> &mut TcpStream {
+        self.stream
+    }
+}
+
 // Security limits
-const MAX_USERNAME_LENGTH: usize = 32;
-const MAX_MESSAGE_LENGTH: usize = 1024; // 1KB max message content
-const RATE_LIMIT_MESSAGES: usize = 10; // Max messages per window
-const RATE_LIMIT_WINDOW: Duration = Duration::from_secs(1); // 1 second window
+pub const MAX_USERNAME_LENGTH: usize = 32;
+pub const MAX_MESSAGE_LENGTH: usize = 1024; // 1KB max message content
 
-// Simple rate limiter using token bucket
-struct RateLimiter {
-    tokens: usize,
-    max_tokens: usize,
-    last_refill: Instant,
-    refill_interval: Duration,
+pub struct MessageHandlers<'a> {
+    pub addr: SocketAddr,
+    pub tx: &'a broadcast::Sender<(ChatMessage, SocketAddr)>,
+    pub connected_clients: &'a Arc<RwLock<HashSet<String>>>,
 }
 
-impl RateLimiter {
-    fn new(max_tokens: usize, refill_interval: Duration) -> Self {
-        Self {
-            tokens: max_tokens,
-            max_tokens,
-            last_refill: Instant::now(),
-            refill_interval,
-        }
-    }
-
-    fn check_and_consume(&mut self) -> bool {
-        self.refill();
-        if self.tokens > 0 {
-            self.tokens -= 1;
-            true
-        } else {
-            false
-        }
-    }
-
-    fn refill(&mut self) {
-        let now = Instant::now();
-        let elapsed = now.duration_since(self.last_refill);
-        if elapsed >= self.refill_interval {
-            self.tokens = self.max_tokens;
-            self.last_refill = now;
-        }
-    }
-}
-
-pub struct UserConnection {
-    socket: TcpStream,
-    addr: SocketAddr,
-    tx: broadcast::Sender<(ChatMessage, SocketAddr)>,
-    connected_clients: Arc<RwLock<HashSet<String>>>,
-    chat_name: Option<String>,
-    rate_limiter: RateLimiter,
-}
-
-impl TcpMessageHandler for UserConnection {
-    fn get_stream(&mut self) -> &mut tokio::net::TcpStream {
-        &mut self.socket
-    }
-}
-
-#[derive(Debug)]
-pub enum UserConnectionError {
-    IoError(io::Error),
-    BroadcastError(broadcast::error::SendError<(ChatMessage, SocketAddr)>),
-    JoinError,
-    InvalidMessage,
-}
-
-impl std::fmt::Display for UserConnectionError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            UserConnectionError::IoError(e) => write!(f, "IO Error: {}", e),
-            UserConnectionError::BroadcastError(e) => write!(f, "Broadcast Error: {}", e),
-            UserConnectionError::JoinError => write!(f, "Join Error: Username already taken"),
-            UserConnectionError::InvalidMessage => write!(f, "Invalid Message Error"),
-        }
-    }
-}
-
-impl UserConnection {
-    pub fn new(
-        socket: TcpStream,
-        addr: SocketAddr,
-        tx: broadcast::Sender<(ChatMessage, SocketAddr)>,
-        connected_clients: Arc<RwLock<HashSet<String>>>,
-    ) -> Self {
-        UserConnection {
-            socket,
-            addr,
-            tx,
-            connected_clients,
-            chat_name: None,
-            rate_limiter: RateLimiter::new(RATE_LIMIT_MESSAGES, RATE_LIMIT_WINDOW),
-        }
-    }
-
-    pub async fn handle(&mut self) -> Result<(), UserConnectionError> {
-        logger::log_info(&format!("New client connected: {}", self.addr));
-
-        let mut rx = self.tx.subscribe();
-
-        loop {
-            tokio::select! {
-                // Branch 1: Receive from client
-                result = self.read_message_chunked() => {
-                    match result {
-                        Ok(msg) => {
-                            if let Err(e) = self.process_message(msg).await {
-                                logger::log_error(&format!("Error handling message from {}: {:?}", self.addr, e));
-                            }
-                        }
-                        Err(TcpMessageHandlerError::IoError(e)) => {
-                            logger::log_error(&format!("IO error reading from {}: {:?}", self.addr, e));
-                            break;
-                        }
-                        Err(TcpMessageHandlerError::Disconnect) => {
-                            logger::log_warning(&format!("Client {} disconnected", self.addr));
-                            break;
-                        }
-                    };
-                }
-                // Branch 2: Broadcast to other clients
-                result = rx.recv() => {
-                    match result {
-                        Ok((msg, _src_addr)) => {
-                            if let Err(e) = self.send_message_chunked(msg).await {
-                                logger::log_warning(&format!("Failed to send message to {}: {:?}", self.addr, e));
-                                // Client likely disconnected, break to clean up
-                                break;
-                            }
-                        }
-                        Err(e) => {
-                            logger::log_error(&format!("Broadcast receive error for {}: {:?}", self.addr, e));
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-
-        // Cleanup on disconnect
-        if let Some(chat_name) = &self.chat_name {
-            let mut clients = self.connected_clients.write().await;
-            clients.remove(chat_name);
-            if let Ok(leave_message) = ChatMessage::try_new(
-                MessageTypes::Leave,
-                Some(chat_name.clone().into_bytes()),
-            ) {
-                let _ = self.tx.send((leave_message, self.addr));
-            }
-            logger::log_system(&format!("{} has left the chat", chat_name));
-        }
-
-        Ok(())
-    }
-
+impl<'a> MessageHandlers<'a> {
     pub fn randomize_username(&self, username: &str) -> String {
         let mut rng = rand::thread_rng();
         let random_suffix: u32 = rng.gen_range(1000..9999);
@@ -172,12 +40,16 @@ impl UserConnection {
     }
 
     pub async fn process_message(
-        &mut self,
+        &self,
         message: ChatMessage,
+        rate_limiter: &mut RateLimiter,
+        stream: &mut TcpStream,
+        chat_name: &mut Option<String>,
     ) -> Result<(), UserConnectionError> {
+        let mut tcp_handler = StreamWrapper { stream };
         // Rate limiting check (except for Join messages)
         if !matches!(message.msg_type, MessageTypes::Join)
-            && !self.rate_limiter.check_and_consume()
+            && !rate_limiter.check_and_consume()
         {
             logger::log_warning(&format!("Rate limit exceeded for {}", self.addr));
             let error_msg = ChatMessage::try_new(
@@ -185,7 +57,8 @@ impl UserConnection {
                 Some(b"Rate limit exceeded. Please slow down.".to_vec()),
             )
             .map_err(|_| UserConnectionError::InvalidMessage)?;
-            self.send_message_chunked(error_msg)
+            tcp_handler
+                .send_message_chunked(error_msg)
                 .await
                 .map_err(UserConnectionError::IoError)?;
             return Ok(());
@@ -193,17 +66,18 @@ impl UserConnection {
 
         match message.msg_type {
             MessageTypes::Join => {
-                self.process_join(message.content_as_string()).await?;
+                self.process_join(message.content_as_string(), &mut tcp_handler, chat_name)
+                    .await?;
             }
             MessageTypes::ChatMessage => {
-                self.process_chat_message(message.content_as_string())
+                self.process_chat_message(message.content_as_string(), chat_name)
                     .await?;
             }
             MessageTypes::ListUsers => {
-                self.process_list_users().await?;
+                self.process_list_users(&mut tcp_handler).await?;
             }
             MessageTypes::DirectMessage => {
-                self.process_direct_message(message.content_as_string())
+                self.process_direct_message(message.content_as_string(), &mut tcp_handler, chat_name)
                     .await?;
             }
             _ => (),
@@ -211,22 +85,27 @@ impl UserConnection {
         Ok(())
     }
 
-    pub async fn process_list_users(&mut self) -> Result<(), UserConnectionError> {
+    async fn process_list_users(
+        &self,
+        tcp_handler: &mut StreamWrapper<'_>,
+    ) -> Result<(), UserConnectionError> {
         let clients = self.connected_clients.clone();
         let clients = clients.read().await;
         let user_list = clients.iter().cloned().collect::<Vec<String>>().join("\n");
         let list_message =
             ChatMessage::try_new(MessageTypes::ListUsers, Some(user_list.into_bytes()))
                 .map_err(|_| UserConnectionError::InvalidMessage)?;
-        self.send_message_chunked(list_message)
+        tcp_handler
+            .send_message_chunked(list_message)
             .await
             .map_err(UserConnectionError::IoError)?;
         Ok(())
     }
 
-    pub async fn process_chat_message(
-        &mut self,
+    async fn process_chat_message(
+        &self,
         content: Option<String>,
+        chat_name: &Option<String>,
     ) -> Result<(), UserConnectionError> {
         let chat_content = content.ok_or(UserConnectionError::InvalidMessage)?;
 
@@ -240,7 +119,7 @@ impl UserConnection {
             return Err(UserConnectionError::InvalidMessage);
         }
 
-        if let Some(chat_name) = &self.chat_name {
+        if let Some(chat_name) = chat_name {
             let full_message = format!("{}: {}", chat_name, chat_content);
             logger::log_chat(&full_message);
             let broadcast_message =
@@ -259,9 +138,11 @@ impl UserConnection {
         }
     }
 
-    pub async fn process_direct_message(
-        &mut self,
+    async fn process_direct_message(
+        &self,
         content: Option<String>,
+        tcp_handler: &mut StreamWrapper<'_>,
+        chat_name: &Option<String>,
     ) -> Result<(), UserConnectionError> {
         let content = content.ok_or(UserConnectionError::InvalidMessage)?;
 
@@ -275,7 +156,7 @@ impl UserConnection {
                 ));
                 return Err(UserConnectionError::InvalidMessage);
             }
-            if let Some(sender) = &self.chat_name {
+            if let Some(sender) = chat_name {
                 // Check if recipient exists
                 let clients = self.connected_clients.read().await;
                 if !clients.contains(recipient) {
@@ -283,15 +164,17 @@ impl UserConnection {
 
                     // Send error message back to sender
                     let error_msg = format!("User '{}' not found", recipient);
-                    logger::log_warning(&format!("[DM] {} -> {} (user not found)", sender, recipient));
+                    logger::log_warning(&format!(
+                        "[DM] {} -> {} (user not found)",
+                        sender, recipient
+                    ));
 
-                    let error_message = ChatMessage::try_new(
-                        MessageTypes::Error,
-                        Some(error_msg.into_bytes()),
-                    )
-                    .map_err(|_| UserConnectionError::InvalidMessage)?;
+                    let error_message =
+                        ChatMessage::try_new(MessageTypes::Error, Some(error_msg.into_bytes()))
+                            .map_err(|_| UserConnectionError::InvalidMessage)?;
 
-                    self.send_message_chunked(error_message)
+                    tcp_handler
+                        .send_message_chunked(error_message)
                         .await
                         .map_err(UserConnectionError::IoError)?;
                     return Ok(());
@@ -315,10 +198,7 @@ impl UserConnection {
                     .map_err(UserConnectionError::BroadcastError)?;
                 Ok(())
             } else {
-                logger::log_warning(&format!(
-                    "User at {} sent DM before joining",
-                    self.addr
-                ));
+                logger::log_warning(&format!("User at {} sent DM before joining", self.addr));
                 Err(UserConnectionError::InvalidMessage)
             }
         } else {
@@ -326,9 +206,11 @@ impl UserConnection {
         }
     }
 
-    pub async fn process_join(
-        &mut self,
+    async fn process_join(
+        &self,
         username: Option<String>,
+        tcp_handler: &mut StreamWrapper<'_>,
+        chat_name: &mut Option<String>,
     ) -> Result<(), UserConnectionError> {
         let content = username.ok_or(UserConnectionError::InvalidMessage)?;
 
@@ -357,7 +239,7 @@ impl UserConnection {
         let connected_clients = self.connected_clients.clone();
         {
             let mut clients = connected_clients.write().await;
-            self.chat_name = if !clients.insert(content.clone()) {
+            *chat_name = if !clients.insert(content.clone()) {
                 logger::log_warning(&format!("User '{}' already exists, renaming...", content));
                 let new_name = self.randomize_username(&content);
                 if !clients.insert(new_name.clone()) {
@@ -373,7 +255,8 @@ impl UserConnection {
                     Some(new_name.clone().into_bytes()),
                 )
                 .map_err(|_| UserConnectionError::InvalidMessage)?;
-                self.send_message_chunked(rename_message)
+                tcp_handler
+                    .send_message_chunked(rename_message)
                     .await
                     .map_err(UserConnectionError::IoError)?;
                 Some(new_name)
@@ -382,7 +265,7 @@ impl UserConnection {
             };
         }
 
-        if let Some(chat_name) = &self.chat_name {
+        if let Some(chat_name) = &chat_name {
             let join_message =
                 ChatMessage::try_new(MessageTypes::Join, Some(chat_name.clone().into_bytes()))
                     .map_err(|_| UserConnectionError::InvalidMessage)?;
@@ -400,79 +283,44 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_rate_limiter_allows_messages_within_limit() {
-        let mut limiter = RateLimiter::new(5, Duration::from_secs(1));
-
-        // Should allow 5 messages
-        for _ in 0..5 {
-            assert!(limiter.check_and_consume());
-        }
-    }
-
-    #[test]
-    fn test_rate_limiter_blocks_excess_messages() {
-        let mut limiter = RateLimiter::new(3, Duration::from_secs(1));
-
-        // Consume all tokens
-        for _ in 0..3 {
-            assert!(limiter.check_and_consume());
-        }
-
-        // Should block the 4th message
-        assert!(!limiter.check_and_consume());
-    }
-
-    #[test]
-    fn test_rate_limiter_refills_after_interval() {
-        let mut limiter = RateLimiter::new(2, Duration::from_millis(100));
-
-        // Consume all tokens
-        assert!(limiter.check_and_consume());
-        assert!(limiter.check_and_consume());
-        assert!(!limiter.check_and_consume());
-
-        // Wait for refill
-        std::thread::sleep(Duration::from_millis(150));
-
-        // Should allow messages again
-        assert!(limiter.check_and_consume());
-        assert!(limiter.check_and_consume());
-    }
-
-    #[test]
-    fn test_rate_limiter_multiple_refills() {
-        let mut limiter = RateLimiter::new(1, Duration::from_millis(50));
-
-        for _ in 0..3 {
-            assert!(limiter.check_and_consume());
-            assert!(!limiter.check_and_consume()); // Blocked
-            std::thread::sleep(Duration::from_millis(60)); // Wait for refill
-        }
-    }
-
-    #[test]
     fn test_username_validation_valid() {
         // Valid usernames
         assert_eq!("alice".len(), 5);
-        assert!("alice".chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-'));
+        assert!("alice"
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '_' || c == '-'));
 
         assert_eq!("Bob123".len(), 6);
-        assert!("Bob123".chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-'));
+        assert!("Bob123"
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '_' || c == '-'));
 
         assert_eq!("user_name".len(), 9);
-        assert!("user_name".chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-'));
+        assert!("user_name"
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '_' || c == '-'));
 
         assert_eq!("user-name".len(), 9);
-        assert!("user-name".chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-'));
+        assert!("user-name"
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '_' || c == '-'));
     }
 
     #[test]
     fn test_username_validation_invalid_chars() {
         // Invalid characters
-        assert!(!"user@name".chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-'));
-        assert!(!"user name".chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-'));
-        assert!(!"user!name".chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-'));
-        assert!(!"user.name".chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-'));
+        assert!(!"user@name"
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '_' || c == '-'));
+        assert!(!"user name"
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '_' || c == '-'));
+        assert!(!"user!name"
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '_' || c == '-'));
+        assert!(!"user.name"
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '_' || c == '-'));
     }
 
     #[test]
@@ -506,5 +354,4 @@ mod tests {
         let too_long = "x".repeat(MAX_MESSAGE_LENGTH + 1);
         assert!(too_long.len() > MAX_MESSAGE_LENGTH);
     }
-
 }
