@@ -6,8 +6,53 @@ use std::collections::HashSet;
 use std::io;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokio::net::TcpStream;
 use tokio::sync::{RwLock, broadcast};
+
+// Security limits
+const MAX_USERNAME_LENGTH: usize = 32;
+const MAX_MESSAGE_LENGTH: usize = 1024; // 1KB max message content
+const RATE_LIMIT_MESSAGES: usize = 10; // Max messages per window
+const RATE_LIMIT_WINDOW: Duration = Duration::from_secs(1); // 1 second window
+
+// Simple rate limiter using token bucket
+struct RateLimiter {
+    tokens: usize,
+    max_tokens: usize,
+    last_refill: Instant,
+    refill_interval: Duration,
+}
+
+impl RateLimiter {
+    fn new(max_tokens: usize, refill_interval: Duration) -> Self {
+        Self {
+            tokens: max_tokens,
+            max_tokens,
+            last_refill: Instant::now(),
+            refill_interval,
+        }
+    }
+
+    fn check_and_consume(&mut self) -> bool {
+        self.refill();
+        if self.tokens > 0 {
+            self.tokens -= 1;
+            true
+        } else {
+            false
+        }
+    }
+
+    fn refill(&mut self) {
+        let now = Instant::now();
+        let elapsed = now.duration_since(self.last_refill);
+        if elapsed >= self.refill_interval {
+            self.tokens = self.max_tokens;
+            self.last_refill = now;
+        }
+    }
+}
 
 pub struct UserConnection {
     socket: TcpStream,
@@ -15,6 +60,7 @@ pub struct UserConnection {
     tx: broadcast::Sender<(ChatMessage, SocketAddr)>,
     connected_clients: Arc<RwLock<HashSet<String>>>,
     chat_name: Option<String>,
+    rate_limiter: RateLimiter,
 }
 
 impl TcpMessageHandler for UserConnection {
@@ -55,6 +101,7 @@ impl UserConnection {
             tx,
             connected_clients,
             chat_name: None,
+            rate_limiter: RateLimiter::new(RATE_LIMIT_MESSAGES, RATE_LIMIT_WINDOW),
         }
     }
 
@@ -128,6 +175,22 @@ impl UserConnection {
         &mut self,
         message: ChatMessage,
     ) -> Result<(), UserConnectionError> {
+        // Rate limiting check (except for Join messages)
+        if !matches!(message.msg_type, MessageTypes::Join)
+            && !self.rate_limiter.check_and_consume()
+        {
+            logger::log_warning(&format!("Rate limit exceeded for {}", self.addr));
+            let error_msg = ChatMessage::try_new(
+                MessageTypes::Error,
+                Some(b"Rate limit exceeded. Please slow down.".to_vec()),
+            )
+            .map_err(|_| UserConnectionError::InvalidMessage)?;
+            self.send_message_chunked(error_msg)
+                .await
+                .map_err(UserConnectionError::IoError)?;
+            return Ok(());
+        }
+
         match message.msg_type {
             MessageTypes::Join => {
                 self.process_join(message.content_as_string()).await?;
@@ -165,10 +228,18 @@ impl UserConnection {
         &mut self,
         content: Option<String>,
     ) -> Result<(), UserConnectionError> {
-        if content.is_none() {
+        let chat_content = content.ok_or(UserConnectionError::InvalidMessage)?;
+
+        // Validate message length
+        if chat_content.is_empty() || chat_content.len() > MAX_MESSAGE_LENGTH {
+            logger::log_warning(&format!(
+                "Invalid message length from {}: {} chars",
+                self.addr,
+                chat_content.len()
+            ));
             return Err(UserConnectionError::InvalidMessage);
         }
-        let chat_content = content.unwrap();
+
         if let Some(chat_name) = &self.chat_name {
             let full_message = format!("{}: {}", chat_name, chat_content);
             logger::log_chat(&full_message);
@@ -192,12 +263,18 @@ impl UserConnection {
         &mut self,
         content: Option<String>,
     ) -> Result<(), UserConnectionError> {
-        if content.is_none() {
-            return Err(UserConnectionError::InvalidMessage);
-        }
+        let content = content.ok_or(UserConnectionError::InvalidMessage)?;
 
-        let content = content.unwrap();
         if let Some((recipient, message)) = content.split_once('|') {
+            // Validate message length
+            if message.is_empty() || message.len() > MAX_MESSAGE_LENGTH {
+                logger::log_warning(&format!(
+                    "Invalid DM length from {}: {} chars",
+                    self.addr,
+                    message.len()
+                ));
+                return Err(UserConnectionError::InvalidMessage);
+            }
             if let Some(sender) = &self.chat_name {
                 // Check if recipient exists
                 let clients = self.connected_clients.read().await;
@@ -253,11 +330,32 @@ impl UserConnection {
         &mut self,
         username: Option<String>,
     ) -> Result<(), UserConnectionError> {
-        if username.is_none() {
+        let content = username.ok_or(UserConnectionError::InvalidMessage)?;
+
+        // Validate username length
+        if content.is_empty() || content.len() > MAX_USERNAME_LENGTH {
+            logger::log_warning(&format!(
+                "Invalid username length from {}: {} chars",
+                self.addr,
+                content.len()
+            ));
             return Err(UserConnectionError::InvalidMessage);
         }
+
+        // Validate username characters (alphanumeric, underscore, hyphen only)
+        if !content
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
+        {
+            logger::log_warning(&format!(
+                "Invalid username characters from {}: {}",
+                self.addr, content
+            ));
+            return Err(UserConnectionError::InvalidMessage);
+        }
+
         let connected_clients = self.connected_clients.clone();
-        if let Some(content) = username {
+        {
             let mut clients = connected_clients.write().await;
             self.chat_name = if !clients.insert(content.clone()) {
                 logger::log_warning(&format!("User '{}' already exists, renaming...", content));
@@ -281,10 +379,9 @@ impl UserConnection {
                 Some(new_name)
             } else {
                 Some(content)
-            }
-        } else {
-            return Err(UserConnectionError::InvalidMessage);
+            };
         }
+
         if let Some(chat_name) = &self.chat_name {
             let join_message =
                 ChatMessage::try_new(MessageTypes::Join, Some(chat_name.clone().into_bytes()))

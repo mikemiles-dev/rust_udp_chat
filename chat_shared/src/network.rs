@@ -3,6 +3,7 @@ use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
 
 pub const CHUNK_SIZE: usize = 8192;
+pub const MAX_MESSAGE_SIZE: usize = 8192; // 8KB max message size
 
 pub enum TcpMessageHandlerError {
     IoError(std::io::Error),
@@ -15,7 +16,11 @@ pub trait TcpMessageHandler {
 
     async fn send_message_chunked(&mut self, message: ChatMessage) -> Result<(), std::io::Error> {
         let message_bytes: Vec<u8> = message.into();
-        let msg_len = message_bytes.len() as u16;
+
+        // Validate message size to prevent integer overflow
+        let msg_len = u16::try_from(message_bytes.len()).map_err(|_| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, "Message too large")
+        })?;
 
         // Send the message length first
         self.get_stream().write_all(&msg_len.to_be_bytes()).await?;
@@ -61,6 +66,14 @@ pub trait TcpMessageHandler {
             })?;
 
         let msg_len = u16::from_be_bytes(len_bytes) as usize;
+
+        // Validate message size to prevent memory exhaustion attacks
+        if msg_len > MAX_MESSAGE_SIZE {
+            return Err(TcpMessageHandlerError::IoError(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Message exceeds maximum size",
+            )));
+        }
 
         // Read the message in chunks to handle large messages
         let mut message_bytes = Vec::with_capacity(msg_len);
