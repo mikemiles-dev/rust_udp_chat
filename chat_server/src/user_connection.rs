@@ -129,8 +129,24 @@ impl UserConnection {
                 self.process_chat_message(message.content_as_string())
                     .await?;
             }
+            MessageTypes::ListUsers => {
+                self.process_list_users().await?;
+            }
             _ => (),
         }
+        Ok(())
+    }
+
+    pub async fn process_list_users(&mut self) -> Result<(), UserConnectionError> {
+        let clients = self.connected_clients.clone();
+        let clients = clients.read().await;
+        let user_list = clients.iter().cloned().collect::<Vec<String>>().join("\n");
+        let list_message =
+            ChatMessage::try_new(MessageTypes::ListUsers, Some(user_list.into_bytes()))
+                .map_err(|_| UserConnectionError::InvalidMessage)?;
+        self.send_message_chunked(list_message)
+            .await
+            .map_err(UserConnectionError::IoError)?;
         Ok(())
     }
 

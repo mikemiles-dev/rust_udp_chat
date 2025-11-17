@@ -68,6 +68,7 @@ Once connected, you can use the following commands:
 
 - `/help` - Display available commands
 - `/quit` - Exit the chat application
+- `/list` - List users
 - Any other text - Send a message to all connected users
 
 ### Example Session

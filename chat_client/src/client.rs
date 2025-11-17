@@ -91,23 +91,41 @@ impl ChatClient {
                     }
                 }
             }
+            MessageTypes::ListUsers => {
+                if let Some(content) = self.get_message_content(&message, "list users") {
+                    logger::log_info("Current users online:");
+                    for user in content.lines() {
+                        logger::log_info(&format!(" - {}", user));
+                    }
+                }
+            }
             _ => {
                 logger::log_warning(&format!("Unknown message type: {:?}", message.msg_type));
             }
         }
     }
 
-    async fn handle_user_input(&mut self, user_input: input::UserInput) -> Result<(), ChatClientError> {
+    async fn handle_user_input(
+        &mut self,
+        user_input: input::UserInput,
+    ) -> Result<(), ChatClientError> {
         match user_input {
             input::UserInput::Message(msg) => {
-                let message = ChatMessage::try_new(MessageTypes::ChatMessage, Some(msg.into_bytes()))?;
+                let message =
+                    ChatMessage::try_new(MessageTypes::ChatMessage, Some(msg.into_bytes()))?;
                 self.send_message_chunked(message).await?;
                 Ok(())
             }
             input::UserInput::Help => {
                 logger::log_info("Available commands:");
                 logger::log_info("  /help - Show this help message");
+                logger::log_info("  /list - List all users");
                 logger::log_info("  /quit - Exit the chat");
+                Ok(())
+            }
+            input::UserInput::ListUsers => {
+                let message = ChatMessage::try_new(MessageTypes::ListUsers, None)?;
+                self.send_message_chunked(message).await?;
                 Ok(())
             }
             input::UserInput::Quit => Ok(()),
@@ -145,6 +163,13 @@ impl ChatClient {
                 result = input::get_user_input(&mut reader) => {
                     match result {
                         Ok(input::UserInput::Quit) => return Ok(()),
+                        Ok(input::UserInput::ListUsers) => {
+                            let message = ChatMessage::try_new(MessageTypes::ListUsers, None)
+                                .map_err(|e| io::Error::other(format!("Failed to create ListUsers message: {e:?}")))?;
+                            self.send_message_chunked(message).await
+                                .map_err(|e| io::Error::other(format!("Failed to send ListUsers message: {e:?}")))?;
+                            self.display_prompt()?;
+                        }
                         Ok(user_input) => {
                             if let Err(e) = self.handle_user_input(user_input).await {
                                 logger::log_error(&format!("Error: {e:?}"));

@@ -4,6 +4,7 @@ pub enum MessageTypes {
     Join,
     Leave,
     UserRename,
+    ListUsers,
     Unknown(u8),
 }
 
@@ -14,6 +15,7 @@ impl From<u8> for MessageTypes {
             2 => MessageTypes::Join,
             3 => MessageTypes::Leave,
             4 => MessageTypes::UserRename,
+            5 => MessageTypes::ListUsers,
             other => MessageTypes::Unknown(other),
         }
     }
@@ -106,6 +108,7 @@ impl From<ChatMessage> for Vec<u8> {
             MessageTypes::Join => 2,
             MessageTypes::Leave => 3,
             MessageTypes::UserRename => 4,
+            MessageTypes::ListUsers => 5,
             MessageTypes::Unknown(val) => val,
         });
         if let Some(content) = message.content {

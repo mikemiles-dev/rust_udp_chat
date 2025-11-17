@@ -3,6 +3,7 @@ use std::io;
 #[derive(Debug)]
 pub enum UserInput {
     Help,
+    ListUsers,
     Message(String),
     Quit,
 }
@@ -10,6 +11,7 @@ pub enum UserInput {
 #[derive(Debug)]
 pub enum UserInputError {
     IoError,
+    InvalidCommand,
 }
 
 impl From<io::Error> for UserInputError {
@@ -18,13 +20,22 @@ impl From<io::Error> for UserInputError {
     }
 }
 
-impl From<&str> for UserInput {
-    fn from(value: &str) -> Self {
+impl TryFrom<&str> for UserInput {
+    type Error = UserInputError;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
         let trimmed = value.trim();
         match trimmed.split_whitespace().next().unwrap_or("") {
-            "/quit" => UserInput::Quit,
-            "/help" => UserInput::Help,
-            _ => UserInput::Message(trimmed.to_string()),
+            "/quit" => Ok(UserInput::Quit),
+            "/list" => Ok(UserInput::ListUsers),
+            "/help" => Ok(UserInput::Help),
+            _ => {
+                if trimmed.starts_with('/') {
+                    Err(UserInputError::InvalidCommand)
+                } else {
+                    Ok(UserInput::Message(trimmed.to_string()))
+                }
+            }
         }
     }
 }
@@ -37,7 +48,7 @@ where
 
     match reader.read_line(&mut input_line).await {
         Ok(0) => Ok(UserInput::Quit),
-        Ok(_) => Ok(UserInput::from(input_line.as_str())),
+        Ok(_) => UserInput::try_from(input_line.as_str()),
         Err(e) => Err(e.into()),
     }
 }
