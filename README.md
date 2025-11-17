@@ -15,6 +15,7 @@ A modern, colorful terminal-based chat application written in Rust with async/aw
 - 🔧 **Modular Architecture** - Clean separation between client, server, and shared code
 - 🛡️ **Smart Username Handling** - Automatic renaming for duplicate usernames
 - 🔁 **Auto-Reconnect** - Exponential backoff reconnection when server goes down
+- 🔒 **Security Hardened** - Rate limiting, input validation, connection limits, and memory safety
 - 📊 **Rich Logging** - Categorized logs (INFO, ERROR, WARN, OK, SYSTEM, CHAT)
 
 ## Architecture
@@ -160,6 +161,68 @@ Send private messages to specific users:
 - **Privacy**: The server logs that DMs are happening but doesn't display the message content
 - **Validation**: Server validates that the recipient exists before sending
 
+### Security Features
+
+The application implements comprehensive security measures to protect against common network attacks:
+
+#### Input Validation
+- **Username Validation**:
+  - Maximum length: 32 characters
+  - Allowed characters: alphanumeric, underscore, and hyphen only
+  - Empty usernames rejected
+- **Message Validation**:
+  - Maximum message size: 8KB (prevents memory exhaustion)
+  - Maximum content length: 1KB per message
+  - Empty messages blocked (client and server-side)
+  - Integer overflow protection with safe type conversion
+
+#### Rate Limiting
+- **Token Bucket Algorithm**: 10 messages per second per connection
+- **Auto-refill**: Resets every second
+- **Smart Filtering**: Join messages excluded from rate limits
+- **User Feedback**: Clients receive "Rate limit exceeded" errors
+- **Protection Against**: Spam floods, DoS attacks, message bombing
+
+#### Connection Management
+- **Connection Limits**: Configurable max clients (default: 100)
+- **Enforcement**: Server rejects new connections when at capacity
+- **Atomic Tracking**: Thread-safe connection counting
+- **Auto-cleanup**: Connections automatically decremented on disconnect
+- **Graceful Handling**: Proper cleanup on all disconnect scenarios
+
+#### Memory Safety
+- **Zero `unsafe` Code**: Entire codebase is memory-safe Rust
+- **No `.unwrap()` Panics**: All error paths use safe `Result` propagation
+- **Bounded Allocations**: All memory allocations are size-limited
+- **Overflow Protection**: Integer conversions use `try_from()` for safety
+
+#### Network Security
+- **Message Size Limits**: 8KB maximum per message
+- **Chunked Protocol**: Supports large messages without blocking
+- **Acknowledgment System**: "OK" handshake prevents desynchronization
+- **Clean Disconnects**: Explicit connection shutdown before reconnect
+- **Backpressure Handling**: Broadcast channel sized for burst traffic
+
+#### Error Handling
+- **Validated Inputs**: All user inputs are validated before processing
+- **Error Messages**: Clear feedback sent to clients for invalid operations
+- **Logging**: Security events logged with warnings
+- **Graceful Degradation**: Invalid requests don't crash the server
+
+#### Security Metrics
+
+| Security Feature | Implementation |
+|-----------------|----------------|
+| Max Message Size | 8KB |
+| Max Username Length | 32 characters |
+| Max Message Content | 1KB |
+| Rate Limit | 10 messages/second |
+| Connection Limit | Configurable (default: 100) |
+| Memory Safety | 100% safe Rust |
+| Input Validation | Comprehensive |
+
+**Note**: For production deployment, consider adding TLS encryption, authentication, and E2E encryption for enhanced security.
+
 ### Message Protocol
 
 Messages are sent over TCP with a custom chunked protocol that supports:
@@ -224,9 +287,11 @@ This project is available for educational and personal use.
 
 ## Future Enhancements
 
+- [ ] TLS/SSL encryption for network traffic
+- [ ] End-to-end encryption for direct messages
+- [ ] User authentication system
 - [ ] Chat rooms/channels
-- [ ] Message history
-- [ ] User authentication
-- [ ] File sharing
-- [ ] Encryption
+- [ ] Message history and persistence
+- [ ] File sharing capabilities
+- [ ] Read timeouts for slowloris protection
 - [ ] GUI client
