@@ -102,7 +102,11 @@ rust_chat/
 ├── chat_server/
 │   └── src/
 │       ├── main.rs          # Server entry point
-│       └── user_connection.rs # Connection handling
+│       └── user_connection/
+│           ├── mod.rs       # UserConnection struct and event loop
+│           ├── error.rs     # Error types and Display impl
+│           ├── handlers.rs  # Message processing logic
+│           └── rate_limiting.rs # Token bucket rate limiter
 └── chat_shared/
     └── src/
         ├── lib.rs           # Module exports
