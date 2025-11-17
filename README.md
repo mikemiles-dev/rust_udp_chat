@@ -66,9 +66,11 @@ You'll be prompted to enter:
 
 Once connected, you can use the following commands:
 
-- `/help` - Display available commands
-- `/quit` - Exit the chat application
-- `/list` - List users
+- `/help` -             Display available commands
+- `/quit` -             Exit the chat application
+- `/list` -             List users
+- `/dm <USERNAME>` -    Direct Message a User
+- `/r` -                Reply to a DM
 - Any other text - Send a message to all connected users
 
 ### Example Session
@@ -131,6 +133,7 @@ If you try to join with a username that's already taken, the server automaticall
 Messages are sent over TCP with a custom chunked protocol that supports:
 - Join notifications
 - Leave notifications
+- Direct Messages
 - Username renames
 - Chat messages
 
@@ -187,7 +190,6 @@ This project is available for educational and personal use.
 
 ## Future Enhancements
 
-- [ ] Private messaging
 - [ ] Chat rooms/channels
 - [ ] Message history
 - [ ] User authentication

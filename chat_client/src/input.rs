@@ -5,6 +5,8 @@ pub enum UserInput {
     Help,
     ListUsers,
     Message(String),
+    DirectMessage { recipient: String, message: String },
+    Reply(String),
     Quit,
 }
 
@@ -12,6 +14,7 @@ pub enum UserInput {
 pub enum UserInputError {
     IoError,
     InvalidCommand,
+    InvalidUser,
 }
 
 impl From<io::Error> for UserInputError {
@@ -25,10 +28,29 @@ impl TryFrom<&str> for UserInput {
 
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         let trimmed = value.trim();
-        match trimmed.split_whitespace().next().unwrap_or("") {
+        let parts: Vec<&str> = trimmed.split_whitespace().collect();
+
+        match parts.first().copied().unwrap_or("") {
             "/quit" => Ok(UserInput::Quit),
             "/list" => Ok(UserInput::ListUsers),
             "/help" => Ok(UserInput::Help),
+            "/dm" => {
+                if parts.len() < 3 {
+                    Err(UserInputError::InvalidCommand)
+                } else {
+                    let recipient = parts[1].to_string();
+                    let message = parts[2..].join(" ");
+                    Ok(UserInput::DirectMessage { recipient, message })
+                }
+            }
+            "/r" => {
+                if parts.len() < 2 {
+                    Err(UserInputError::InvalidCommand)
+                } else {
+                    let message = parts[1..].join(" ");
+                    Ok(UserInput::Reply(message))
+                }
+            }
             _ => {
                 if trimmed.starts_with('/') {
                     Err(UserInputError::InvalidCommand)

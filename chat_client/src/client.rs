@@ -35,6 +35,7 @@ impl From<ChatMessageError> for ChatClientError {
 pub struct ChatClient {
     connection: TcpStream,
     chat_name: String,
+    last_dm_sender: Option<String>,
 }
 
 impl ChatClient {
@@ -45,6 +46,7 @@ impl ChatClient {
         Ok(ChatClient {
             connection: stream,
             chat_name: name,
+            last_dm_sender: None,
         })
     }
 
@@ -99,6 +101,29 @@ impl ChatClient {
                     }
                 }
             }
+            MessageTypes::DirectMessage => {
+                if let Some(content) = self.get_message_content(&message, "dm") {
+                    if let Some((sender, rest)) = content.split_once('|') {
+                        if let Some((recipient, msg)) = rest.split_once('|') {
+                            // Display if we are the recipient
+                            if recipient == self.chat_name {
+                                logger::log_warning(&format!("[DM from {}]: {}", sender, msg));
+                                // Track the sender so we can reply with /r
+                                self.last_dm_sender = Some(sender.to_string());
+                            }
+                            // Display if we are the sender (confirmation)
+                            else if sender == self.chat_name {
+                                logger::log_info(&format!("[DM to {}]: {}", recipient, msg));
+                            }
+                        }
+                    }
+                }
+            }
+            MessageTypes::Error => {
+                if let Some(content) = self.get_message_content(&message, "error") {
+                    logger::log_error(&content);
+                }
+            }
             _ => {
                 logger::log_warning(&format!("Unknown message type: {:?}", message.msg_type));
             }
@@ -116,10 +141,31 @@ impl ChatClient {
                 self.send_message_chunked(message).await?;
                 Ok(())
             }
+            input::UserInput::DirectMessage { recipient, message: msg } => {
+                let dm_content = format!("{}|{}", recipient, msg);
+                let message =
+                    ChatMessage::try_new(MessageTypes::DirectMessage, Some(dm_content.into_bytes()))?;
+                self.send_message_chunked(message).await?;
+                Ok(())
+            }
+            input::UserInput::Reply(msg) => {
+                if let Some(recipient) = &self.last_dm_sender {
+                    let dm_content = format!("{}|{}", recipient, msg);
+                    let message =
+                        ChatMessage::try_new(MessageTypes::DirectMessage, Some(dm_content.into_bytes()))?;
+                    self.send_message_chunked(message).await?;
+                    Ok(())
+                } else {
+                    logger::log_error("No one to reply to. Use /dm <username> <message> first.");
+                    Ok(())
+                }
+            }
             input::UserInput::Help => {
                 logger::log_info("Available commands:");
                 logger::log_info("  /help - Show this help message");
                 logger::log_info("  /list - List all users");
+                logger::log_info("  /dm <username> <message> - Send direct message");
+                logger::log_info("  /r <message> - Reply to last direct message");
                 logger::log_info("  /quit - Exit the chat");
                 Ok(())
             }

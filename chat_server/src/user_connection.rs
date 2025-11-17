@@ -132,6 +132,10 @@ impl UserConnection {
             MessageTypes::ListUsers => {
                 self.process_list_users().await?;
             }
+            MessageTypes::DirectMessage => {
+                self.process_direct_message(message.content_as_string())
+                    .await?;
+            }
             _ => (),
         }
         Ok(())
@@ -173,6 +177,67 @@ impl UserConnection {
                 "User at {} sent chat message before joining",
                 self.addr
             ));
+            Err(UserConnectionError::InvalidMessage)
+        }
+    }
+
+    pub async fn process_direct_message(
+        &mut self,
+        content: Option<String>,
+    ) -> Result<(), UserConnectionError> {
+        if content.is_none() {
+            return Err(UserConnectionError::InvalidMessage);
+        }
+
+        let content = content.unwrap();
+        if let Some((recipient, message)) = content.split_once('|') {
+            if let Some(sender) = &self.chat_name {
+                // Check if recipient exists
+                let clients = self.connected_clients.read().await;
+                if !clients.contains(recipient) {
+                    drop(clients); // Release the lock before sending error
+
+                    // Send error message back to sender
+                    let error_msg = format!("User '{}' not found", recipient);
+                    logger::log_warning(&format!("[DM] {} -> {} (user not found)", sender, recipient));
+
+                    let error_message = ChatMessage::try_new(
+                        MessageTypes::Error,
+                        Some(error_msg.into_bytes()),
+                    )
+                    .map_err(|_| UserConnectionError::InvalidMessage)?;
+
+                    self.send_message_chunked(error_message)
+                        .await
+                        .map_err(UserConnectionError::IoError)?;
+                    return Ok(());
+                }
+                drop(clients); // Release the lock
+
+                // Log that a DM is happening, but don't show the content
+                logger::log_system(&format!("[DM] {} -> {}", sender, recipient));
+
+                // Format: sender|recipient|message for client filtering
+                let dm_content = format!("{}|{}|{}", sender, recipient, message);
+                let dm_message = ChatMessage::try_new(
+                    MessageTypes::DirectMessage,
+                    Some(dm_content.into_bytes()),
+                )
+                .map_err(|_| UserConnectionError::InvalidMessage)?;
+
+                // Broadcast to all clients (clients will filter)
+                self.tx
+                    .send((dm_message, self.addr))
+                    .map_err(UserConnectionError::BroadcastError)?;
+                Ok(())
+            } else {
+                logger::log_warning(&format!(
+                    "User at {} sent DM before joining",
+                    self.addr
+                ));
+                Err(UserConnectionError::InvalidMessage)
+            }
+        } else {
             Err(UserConnectionError::InvalidMessage)
         }
     }
