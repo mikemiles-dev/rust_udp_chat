@@ -1,4 +1,3 @@
-use chat_shared::input::UserInput;
 use chat_shared::logger;
 use chat_shared::message::ChatMessage;
 use std::collections::HashSet;
@@ -6,11 +5,12 @@ use std::net::SocketAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::{env, io};
-use tokio::io::BufReader;
 use tokio::net::TcpListener;
 use tokio::sync::{RwLock, broadcast};
 
+mod completer;
 mod input;
+mod readline_helper;
 mod user_connection;
 use input::ServerUserInput;
 use user_connection::UserConnection;
@@ -38,8 +38,8 @@ impl ChatServer {
     }
 
     async fn run(&mut self) -> io::Result<()> {
-        let stdin = tokio::io::stdin();
-        let mut reader = BufReader::new(stdin);
+        // Spawn readline handler in a blocking thread
+        let mut readline_rx = readline_helper::spawn_readline_handler();
 
         loop {
             tokio::select! {
@@ -81,21 +81,30 @@ impl ChatServer {
                         }
                     }
                 }
-                // Handle server commands from stdin
-                result = ServerUserInput::get_user_input::<_, ServerUserInput>(&mut reader) => {
-                    match result {
-                        Ok(ServerUserInput::Quit) => {
+                // Handle server commands from readline
+                Some(line) = readline_rx.recv() => {
+                    match line {
+                        Some(input_line) => {
+                            match ServerUserInput::try_from(input_line.as_str()) {
+                                Ok(ServerUserInput::Quit) => {
+                                    logger::log_info("Server shutting down...");
+                                    return Ok(());
+                                }
+                                Ok(ServerUserInput::ListUsers) => {
+                                    self.handle_list_users().await;
+                                }
+                                Ok(ServerUserInput::Help) => {
+                                    self.handle_help();
+                                }
+                                Err(_) => {
+                                    logger::log_error("Invalid command. Type /help for available commands.");
+                                }
+                            }
+                        }
+                        None => {
+                            // EOF from readline
                             logger::log_info("Server shutting down...");
                             return Ok(());
-                        }
-                        Ok(ServerUserInput::ListUsers) => {
-                            self.handle_list_users().await;
-                        }
-                        Ok(ServerUserInput::Help) => {
-                            self.handle_help();
-                        }
-                        Err(_) => {
-                            logger::log_error("Invalid command. Type /help for available commands.");
                         }
                     }
                 }

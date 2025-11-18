@@ -1,11 +1,13 @@
 use crate::input::{self, ClientUserInput};
-use chat_shared::input::UserInput;
+use crate::readline_helper;
 use chat_shared::logger;
 use chat_shared::message::{ChatMessage, ChatMessageError, MessageTypes};
 use chat_shared::network::TcpMessageHandler;
 use colored::Colorize;
+use std::collections::HashSet;
 use std::io::{self, Write};
 use std::net::{AddrParseError, SocketAddr};
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
@@ -41,6 +43,7 @@ pub struct ChatClient {
     server_addr: SocketAddr,
     chat_name: String,
     last_dm_sender: Option<String>,
+    connected_users: Arc<RwLock<HashSet<String>>>,
 }
 
 impl ChatClient {
@@ -53,6 +56,7 @@ impl ChatClient {
             server_addr,
             chat_name: name,
             last_dm_sender: None,
+            connected_users: Arc::new(RwLock::new(HashSet::new())),
         })
     }
 
@@ -150,6 +154,14 @@ impl ChatClient {
             }
             MessageTypes::ListUsers => {
                 if let Some(content) = self.get_message_content(&message, "list users") {
+                    // Update the connected users list for autocomplete
+                    let mut users = self.connected_users.write().unwrap();
+                    users.clear();
+                    for user in content.lines() {
+                        users.insert(user.to_string());
+                    }
+                    drop(users);
+
                     logger::log_info("Current users online:");
                     for user in content.lines() {
                         logger::log_info(&format!(" - {}", user));
@@ -257,8 +269,8 @@ impl ChatClient {
     }
 
     pub async fn run(&mut self) -> io::Result<()> {
-        let stdin = tokio::io::stdin();
-        let mut reader = tokio::io::BufReader::new(stdin);
+        // Spawn readline handler in a blocking thread
+        let mut readline_rx = readline_helper::spawn_readline_handler(self.connected_users.clone());
         self.display_prompt()?;
 
         loop {
@@ -286,25 +298,33 @@ impl ChatClient {
                         }
                     }
                 }
-                result = ClientUserInput::get_user_input::<_, ClientUserInput>(&mut reader) => {
-                    match result {
-                        Ok(input::ClientUserInput::Quit) => return Ok(()),
-                        Ok(input::ClientUserInput::ListUsers) => {
-                            let message = ChatMessage::try_new(MessageTypes::ListUsers, None)
-                                .map_err(|e| io::Error::other(format!("Failed to create ListUsers message: {e:?}")))?;
-                            self.send_message_chunked(message).await
-                                .map_err(|e| io::Error::other(format!("Failed to send ListUsers message: {e:?}")))?;
-                            self.display_prompt()?;
-                        }
-                        Ok(user_input) => {
-                            if let Err(e) = self.handle_user_input(user_input).await {
-                                logger::log_error(&format!("Error: {e:?}"));
-                                self.display_prompt()?;
+                Some(line) = readline_rx.recv() => {
+                    match line {
+                        Some(input_line) => {
+                            match ClientUserInput::try_from(input_line.as_str()) {
+                                Ok(input::ClientUserInput::Quit) => return Ok(()),
+                                Ok(input::ClientUserInput::ListUsers) => {
+                                    let message = ChatMessage::try_new(MessageTypes::ListUsers, None)
+                                        .map_err(|e| io::Error::other(format!("Failed to create ListUsers message: {e:?}")))?;
+                                    self.send_message_chunked(message).await
+                                        .map_err(|e| io::Error::other(format!("Failed to send ListUsers message: {e:?}")))?;
+                                    self.display_prompt()?;
+                                }
+                                Ok(user_input) => {
+                                    if let Err(e) = self.handle_user_input(user_input).await {
+                                        logger::log_error(&format!("Error: {e:?}"));
+                                        self.display_prompt()?;
+                                    }
+                                }
+                                Err(e) => {
+                                    logger::log_error(&format!("Input error: {e:?}"));
+                                    self.display_prompt()?;
+                                }
                             }
                         }
-                        Err(e) => {
-                            logger::log_error(&format!("Input error: {e:?}"));
-                            self.display_prompt()?;
+                        None => {
+                            // EOF or error from readline
+                            return Ok(());
                         }
                     }
                 }

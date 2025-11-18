@@ -17,6 +17,9 @@ A modern, colorful terminal-based chat application written in Rust with async/aw
 - 🔁 **Auto-Reconnect** - Exponential backoff reconnection when server goes down
 - 🔒 **Security Hardened** - Rate limiting, input validation, connection limits, and memory safety
 - 📊 **Rich Logging** - Categorized logs (INFO, ERROR, WARN, OK, SYSTEM, CHAT)
+- 📝 **Command History** - Full readline support with persistent command history (up to 1000 commands)
+- ⌨️ **Tab Completion** - Smart autocomplete for commands and usernames
+- 💡 **Inline Hints** - Visual hints showing available completions as you type
 
 ## Architecture
 
@@ -84,6 +87,39 @@ While the server is running, administrators can use these commands:
 - `/list` - Show all currently connected users with count
 - `/quit` or `/q` - Gracefully shutdown the server
 
+### Command History & Autocomplete
+
+Both client and server support advanced input features powered by rustyline:
+
+**Command History:**
+- **↑/↓ arrows** - Navigate through previous commands
+- **Ctrl+R** - Reverse search through history
+- **Persistent** - Up to 1000 commands stored per session
+
+**Tab Completion:**
+- **Client:** Type `/` then press `TAB` to see all commands
+- **Client:** Type `/dm ` then press `TAB` to autocomplete usernames
+- **Server:** Type `/` then press `TAB` to see all server commands
+- **Smart filtering** - Only shows matching completions
+
+**Visual Hints:**
+- Inline gray text shows possible completions as you type
+- Multiple matches display all options
+
+**Example:**
+```bash
+# Type "/h" and see hint showing "elp"
+/h[elp]
+
+# Press TAB to complete
+/help
+
+# Type "/dm A" and press TAB to see users starting with A
+/dm Alice
+
+# Press ↑ to repeat last command
+```
+
 ### Example Client Session
 
 ```
@@ -132,11 +168,15 @@ rust_chat/
 │   └── src/
 │       ├── main.rs          # Entry point and setup
 │       ├── client.rs        # Client logic and message handling
-│       └── input.rs         # Client command processing
+│       ├── input.rs         # Client command processing
+│       ├── completer.rs     # Tab completion for commands & usernames
+│       └── readline_helper.rs # Rustyline integration with async
 ├── chat_server/
 │   └── src/
 │       ├── main.rs          # Server entry point and command handling
 │       ├── input.rs         # Server command processing
+│       ├── completer.rs     # Tab completion for server commands
+│       ├── readline_helper.rs # Rustyline integration with async
 │       └── user_connection/
 │           ├── mod.rs       # UserConnection struct and event loop
 │           ├── error.rs     # Error types and Display impl
@@ -170,6 +210,50 @@ Each username is assigned a consistent color using hash-based selection from 12 
 ### Smart Username Handling
 
 If you try to join with a username that's already taken, the server automatically appends a random 4-digit suffix (e.g., `Alice_1234`).
+
+### Command History & Tab Completion
+
+Powered by `rustyline`, both client and server feature a rich command-line experience:
+
+**Command History Features:**
+- **Navigation**: Use ↑/↓ arrow keys to browse through command history
+- **Reverse Search**: Press Ctrl+R to search backwards through history
+- **Persistent Storage**: Up to 1,000 commands remembered per session
+- **Auto-add**: Commands are automatically added to history after execution
+
+**Tab Completion Features:**
+- **Command Completion**: Press TAB after typing `/` to see all available commands
+- **Username Completion** (Client only): Type `/dm ` and press TAB to autocomplete usernames from connected users
+- **Smart Filtering**: Completions filter based on what you've already typed
+- **Multiple Matches**: Shows all matching options when ambiguous
+
+**Visual Hints:**
+- Inline gray text appears as you type, showing the most likely completion
+- Helps you discover commands without referring to documentation
+
+**Implementation Details:**
+- Runs in a separate blocking thread to maintain async performance
+- Communicates with async runtime via `tokio::sync::mpsc` channels
+- Client tracks connected users list for username autocomplete
+- Updates dynamically when `/list` command is executed
+
+Example interaction:
+```bash
+# Type partial command
+$ /h
+  ↳ [gray hint: "elp" shown]
+
+# Press TAB
+$ /help
+
+# Type /dm and TAB to see all users
+$ /dm [TAB]
+  Alice  Bob  Charlie
+
+# Type first letter and TAB
+$ /dm A[TAB]
+$ /dm Alice
+```
 
 ### Auto-Reconnect with Exponential Backoff
 
@@ -307,12 +391,13 @@ cargo clippy --all-targets --all-features -- -D warnings
 ## Dependencies
 
 ### Core
-- **tokio** - Async runtime
-- **colored** - Terminal colors
+- **tokio** - Async runtime with full features
+- **colored** - Terminal colors for output
 - **chrono** - Timestamp formatting
+- **rustyline** - Readline-like library for command history and tab completion
 
 ### Server-specific
-- **rand** - Random username generation
+- **rand** - Random username generation for collision handling
 
 ## Contributing
 

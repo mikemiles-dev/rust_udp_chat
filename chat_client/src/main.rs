@@ -1,5 +1,7 @@
 mod client;
+mod completer;
 mod input;
+mod readline_helper;
 
 use chat_shared::logger;
 use client::ChatClient;

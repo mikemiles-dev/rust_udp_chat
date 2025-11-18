@@ -10,3 +10,4 @@ readme.workspace = true
 chat_shared.workspace = true
 tokio.workspace = true
 rand.workspace = true
+rustyline.workspace = true
