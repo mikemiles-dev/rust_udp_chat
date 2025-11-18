@@ -1,0 +1,28 @@
+{
+    # Global options
+    email your-email@example.com
+}
+
+# Replace with your domain
+chat.yourdomain.com {
+    # Reverse proxy TCP connections to the chat server
+    reverse_proxy chat_server:8080 {
+        # Enable TCP mode for raw socket connections
+        transport http {
+            # Keep connections alive
+            keepalive 30s
+            keepalive_idle_conns 10
+        }
+    }
+
+    # Logging
+    log {
+        output file /var/log/caddy/access.log
+        format json
+    }
+}
+
+# For local development without TLS (optional)
+:8443 {
+    reverse_proxy chat_server:8080
+}
