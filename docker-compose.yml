@@ -16,13 +16,6 @@ services:
     # Internal port only - not exposed to host
     expose:
       - "8080"
-    # Healthcheck
-    healthcheck:
-      test: ["CMD", "nc", "-z", "localhost", "8080"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
 
   # Caddy reverse proxy with automatic HTTPS
   caddy:
