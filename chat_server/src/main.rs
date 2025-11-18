@@ -1,3 +1,4 @@
+use chat_shared::input::UserInput;
 use chat_shared::logger;
 use chat_shared::message::ChatMessage;
 use std::collections::HashSet;
@@ -5,10 +6,13 @@ use std::net::SocketAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::{env, io};
+use tokio::io::BufReader;
 use tokio::net::TcpListener;
 use tokio::sync::{RwLock, broadcast};
 
+mod input;
 mod user_connection;
+use input::ServerUserInput;
 use user_connection::UserConnection;
 
 pub struct ChatServer {
@@ -34,39 +38,89 @@ impl ChatServer {
     }
 
     async fn run(&mut self) -> io::Result<()> {
+        let stdin = tokio::io::stdin();
+        let mut reader = BufReader::new(stdin);
+
         loop {
-            // Check connection limit before accepting
-            let current_connections = self.active_connections.load(Ordering::Relaxed);
-            if current_connections >= self.max_clients {
-                logger::log_warning(&format!(
-                    "Connection limit reached ({}/{}), waiting...",
-                    current_connections, self.max_clients
-                ));
-                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-                continue;
-            }
+            tokio::select! {
+                // Handle incoming client connections
+                result = self.listener.accept() => {
+                    match result {
+                        Ok((socket, addr)) => {
+                            // Check connection limit
+                            let current_connections = self.active_connections.load(Ordering::Relaxed);
+                            if current_connections >= self.max_clients {
+                                logger::log_warning(&format!(
+                                    "Connection limit reached ({}/{}), rejecting connection from {}",
+                                    current_connections, self.max_clients, addr
+                                ));
+                                continue;
+                            }
 
-            let (socket, addr) = self.listener.accept().await?;
+                            // Increment connection count
+                            self.active_connections.fetch_add(1, Ordering::Relaxed);
 
-            // Increment connection count
-            self.active_connections.fetch_add(1, Ordering::Relaxed);
+                            let tx_clone = self.broadcaster.clone();
+                            let active_connections_clone = self.active_connections.clone();
 
-            let tx_clone = self.broadcaster.clone();
-            let active_connections_clone = self.active_connections.clone();
+                            let mut client_connection =
+                                UserConnection::new(socket, addr, tx_clone, self.connected_clients.clone());
 
-            let mut client_connection =
-                UserConnection::new(socket, addr, tx_clone, self.connected_clients.clone());
+                            tokio::spawn(async move {
+                                if let Err(e) = client_connection.handle().await {
+                                    logger::log_error(&format!("Error handling client {}: {:?}", addr, e));
+                                }
 
-            tokio::spawn(async move {
-                if let Err(e) = client_connection.handle().await {
-                    logger::log_error(&format!("Error handling client {}: {:?}", addr, e));
+                                // Decrement connection count when done
+                                active_connections_clone.fetch_sub(1, Ordering::Relaxed);
+                                logger::log_info(&format!("Connection from {} closed", addr));
+                            });
+                        }
+                        Err(e) => {
+                            logger::log_error(&format!("Failed to accept connection: {:?}", e));
+                        }
+                    }
                 }
-
-                // Decrement connection count when done
-                active_connections_clone.fetch_sub(1, Ordering::Relaxed);
-                logger::log_info(&format!("Connection from {} closed", addr));
-            });
+                // Handle server commands from stdin
+                result = ServerUserInput::get_user_input::<_, ServerUserInput>(&mut reader) => {
+                    match result {
+                        Ok(ServerUserInput::Quit) => {
+                            logger::log_info("Server shutting down...");
+                            return Ok(());
+                        }
+                        Ok(ServerUserInput::ListUsers) => {
+                            self.handle_list_users().await;
+                        }
+                        Ok(ServerUserInput::Help) => {
+                            self.handle_help();
+                        }
+                        Err(_) => {
+                            logger::log_error("Invalid command. Type /help for available commands.");
+                        }
+                    }
+                }
+            }
         }
+    }
+
+    async fn handle_list_users(&self) {
+        let clients = self.connected_clients.read().await;
+        let count = clients.len();
+        if count == 0 {
+            logger::log_info("No users currently connected.");
+        } else {
+            logger::log_info(&format!("Connected users ({}):", count));
+            for user in clients.iter() {
+                logger::log_info(&format!("  - {}", user));
+            }
+        }
+    }
+
+    fn handle_help(&self) {
+        logger::log_info("Available server commands:");
+        logger::log_info("  /list    - List all connected users");
+        logger::log_info("  /help    - Show this help message");
+        logger::log_info("  /quit    - Shutdown the server");
     }
 }
 
@@ -89,6 +143,7 @@ async fn main() -> io::Result<()> {
         "To change max clients, set {} environment variable",
         CHAT_SERVER_MAX_CLIENTS_ENV_VAR
     ));
+    logger::log_info("Server commands: /help, /list, /quit");
 
     server.run().await
 }

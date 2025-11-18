@@ -1,4 +1,5 @@
-use crate::input;
+use crate::input::{self, ClientUserInput};
+use chat_shared::input::UserInput;
 use chat_shared::logger;
 use chat_shared::message::{ChatMessage, ChatMessageError, MessageTypes};
 use chat_shared::network::TcpMessageHandler;
@@ -103,10 +104,8 @@ impl ChatClient {
                     sleep(backoff).await;
 
                     // Exponential backoff with cap
-                    backoff = std::cmp::min(
-                        backoff.saturating_mul(BACKOFF_MULTIPLIER),
-                        MAX_BACKOFF
-                    );
+                    backoff =
+                        std::cmp::min(backoff.saturating_mul(BACKOFF_MULTIPLIER), MAX_BACKOFF);
                     attempt += 1;
                 }
             }
@@ -187,10 +186,10 @@ impl ChatClient {
 
     async fn handle_user_input(
         &mut self,
-        user_input: input::UserInput,
+        user_input: input::ClientUserInput,
     ) -> Result<(), ChatClientError> {
         match user_input {
-            input::UserInput::Message(msg) => {
+            input::ClientUserInput::Message(msg) => {
                 if msg.trim().is_empty() {
                     logger::log_error("Cannot send empty message");
                     return Ok(());
@@ -200,26 +199,33 @@ impl ChatClient {
                 self.send_message_chunked(message).await?;
                 Ok(())
             }
-            input::UserInput::DirectMessage { recipient, message: msg } => {
+            input::ClientUserInput::DirectMessage {
+                recipient,
+                message: msg,
+            } => {
                 if msg.trim().is_empty() {
                     logger::log_error("Cannot send empty direct message");
                     return Ok(());
                 }
                 let dm_content = format!("{}|{}", recipient, msg);
-                let message =
-                    ChatMessage::try_new(MessageTypes::DirectMessage, Some(dm_content.into_bytes()))?;
+                let message = ChatMessage::try_new(
+                    MessageTypes::DirectMessage,
+                    Some(dm_content.into_bytes()),
+                )?;
                 self.send_message_chunked(message).await?;
                 Ok(())
             }
-            input::UserInput::Reply(msg) => {
+            input::ClientUserInput::Reply(msg) => {
                 if msg.trim().is_empty() {
                     logger::log_error("Cannot send empty reply");
                     return Ok(());
                 }
                 if let Some(recipient) = &self.last_dm_sender {
                     let dm_content = format!("{}|{}", recipient, msg);
-                    let message =
-                        ChatMessage::try_new(MessageTypes::DirectMessage, Some(dm_content.into_bytes()))?;
+                    let message = ChatMessage::try_new(
+                        MessageTypes::DirectMessage,
+                        Some(dm_content.into_bytes()),
+                    )?;
                     self.send_message_chunked(message).await?;
                     Ok(())
                 } else {
@@ -227,7 +233,7 @@ impl ChatClient {
                     Ok(())
                 }
             }
-            input::UserInput::Help => {
+            input::ClientUserInput::Help => {
                 logger::log_info("Available commands:");
                 logger::log_info("  /help - Show this help message");
                 logger::log_info("  /list - List all users");
@@ -236,12 +242,12 @@ impl ChatClient {
                 logger::log_info("  /quit - Exit the chat");
                 Ok(())
             }
-            input::UserInput::ListUsers => {
+            input::ClientUserInput::ListUsers => {
                 let message = ChatMessage::try_new(MessageTypes::ListUsers, None)?;
                 self.send_message_chunked(message).await?;
                 Ok(())
             }
-            input::UserInput::Quit => Ok(()),
+            input::ClientUserInput::Quit => Ok(()),
         }
     }
 
@@ -280,10 +286,10 @@ impl ChatClient {
                         }
                     }
                 }
-                result = input::get_user_input(&mut reader) => {
+                result = ClientUserInput::get_user_input::<_, ClientUserInput>(&mut reader) => {
                     match result {
-                        Ok(input::UserInput::Quit) => return Ok(()),
-                        Ok(input::UserInput::ListUsers) => {
+                        Ok(input::ClientUserInput::Quit) => return Ok(()),
+                        Ok(input::ClientUserInput::ListUsers) => {
                             let message = ChatMessage::try_new(MessageTypes::ListUsers, None)
                                 .map_err(|e| io::Error::other(format!("Failed to create ListUsers message: {e:?}")))?;
                             self.send_message_chunked(message).await

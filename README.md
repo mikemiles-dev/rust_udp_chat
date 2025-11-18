@@ -65,18 +65,26 @@ You'll be prompted to enter:
 
 ## Usage
 
-### Chat Commands
+### Client Commands
 
-Once connected, you can use the following commands:
+Once connected to the server, clients can use the following commands:
 
-- `/help` -             Display available commands
-- `/quit` -             Exit the chat application
-- `/list` -             List users
-- `/dm <USERNAME>` -    Direct Message a User
-- `/r` -                Reply to a DM
+- `/help` - Display available commands
+- `/quit` - Exit the chat application
+- `/list` - List all connected users
+- `/dm <USERNAME> <MESSAGE>` - Send a direct message to a specific user
+- `/r <MESSAGE>` - Reply to the last user who sent you a DM
 - Any other text - Send a message to all connected users
 
-### Example Session
+### Server Commands
+
+While the server is running, administrators can use these commands:
+
+- `/help` or `/h` - Display available server commands
+- `/list` - Show all currently connected users with count
+- `/quit` or `/q` - Gracefully shutdown the server
+
+### Example Client Session
 
 ```
 [12:34:56] [INFO] Enter Chat Server (default: 127.0.0.1:8080):
@@ -88,6 +96,32 @@ Alice █
 [12:35:02] [SYSTEM] Bob has joined the chat
 Alice hello everyone!
 [12:35:05] [CHAT] Bob: hi Alice!
+Alice /dm Bob Hey, want to chat privately?
+[12:35:10] [DM] from Bob: Sure thing!
+Alice /r Perfect! Let's discuss the project.
+```
+
+### Example Server Session
+
+```
+[12:34:50] [OK] Chat Server started at 0.0.0.0:8080
+[12:34:50] [INFO] To change address, set CHAT_SERVER_ADDR environment variable
+[12:34:50] [INFO] To change max clients, set CHAT_SERVER_MAX_CLIENTS environment variable
+[12:34:50] [INFO] Server commands: /help, /list, /quit
+[12:34:59] [SYSTEM] Alice has joined the chat
+[12:35:02] [SYSTEM] Bob has joined the chat
+/list
+[12:35:15] [INFO] Connected users (2):
+[12:35:15] [INFO]   - Alice
+[12:35:15] [INFO]   - Bob
+[12:35:30] [SYSTEM] Charlie has joined the chat
+/list
+[12:35:35] [INFO] Connected users (3):
+[12:35:35] [INFO]   - Alice
+[12:35:35] [INFO]   - Bob
+[12:35:35] [INFO]   - Charlie
+/quit
+[12:35:40] [INFO] Server shutting down...
 ```
 
 ## Project Structure
@@ -98,10 +132,11 @@ rust_chat/
 │   └── src/
 │       ├── main.rs          # Entry point and setup
 │       ├── client.rs        # Client logic and message handling
-│       └── input.rs         # User input processing
+│       └── input.rs         # Client command processing
 ├── chat_server/
 │   └── src/
-│       ├── main.rs          # Server entry point
+│       ├── main.rs          # Server entry point and command handling
+│       ├── input.rs         # Server command processing
 │       └── user_connection/
 │           ├── mod.rs       # UserConnection struct and event loop
 │           ├── error.rs     # Error types and Display impl
@@ -110,6 +145,7 @@ rust_chat/
 └── chat_shared/
     └── src/
         ├── lib.rs           # Module exports
+        ├── input.rs         # Shared UserInput trait
         ├── logger.rs        # Colorized logging utilities
         ├── message.rs       # Message protocol
         └── network.rs       # TCP message handling
