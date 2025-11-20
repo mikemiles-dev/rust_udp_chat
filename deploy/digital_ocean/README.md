@@ -71,7 +71,7 @@ cd rust_chat
 ### 6. Run Caddy Setup (One-Time)
 
 ```bash
-cd ~/rust_chat/digital_ocean
+cd ~/rust_chat/deploy/digital_ocean
 sudo ./setup-caddy.sh
 ```
 
@@ -86,7 +86,7 @@ This will:
 ### 7. Start Chat Server
 
 ```bash
-cd ~/rust_chat/digital_ocean
+cd ~/rust_chat/deploy/digital_ocean
 ./start-server.sh
 ```
 
@@ -120,7 +120,7 @@ The server keeps running in the background!
 ### Start Server
 
 ```bash
-cd ~/rust_chat/digital_ocean
+cd ~/rust_chat/deploy/digital_ocean
 ./start-server.sh
 ```
 
@@ -149,7 +149,7 @@ tmux kill-session -t chat
 tmux kill-session -t chat
 
 # Start again
-cd ~/rust_chat/digital_ocean
+cd ~/rust_chat/deploy/digital_ocean
 ./start-server.sh
 ```
 
@@ -531,7 +531,7 @@ A: Attach to tmux and type `/list`
 **Q: Server crashed, how to auto-restart?**
 A: Use systemd instead (see `deploy/NATIVE_DEPLOYMENT.md`) or add to crontab:
 ```bash
-*/5 * * * * tmux has-session -t chat || cd ~/rust_chat/digital_ocean && ./start-server.sh
+*/5 * * * * tmux has-session -t chat || cd ~/rust_chat/deploy/digital_ocean && ./start-server.sh
 ```
 
 **Q: How do I upgrade Caddy?**

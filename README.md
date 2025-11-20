@@ -96,9 +96,9 @@ CHAT_USERNAME="Bob" cargo run --bin client
 
 For production deployment with HTTPS/TLS encryption, see:
 
-- **[digital_ocean/](digital_ocean/)** - Deploy on Digital Ocean with tmux + Caddy (simplest, interactive)
-- **[docker/](docker/)** - Docker deployment with automatic HTTPS
-- **[deploy/](deploy/)** - Native systemd deployment on Ubuntu
+- **[deploy/digital_ocean/](deploy/digital_ocean/)** - Deploy on Digital Ocean with tmux + Caddy (simplest, interactive)
+- **[deploy/docker/](deploy/docker/)** - Docker deployment with automatic HTTPS
+- **[deploy/native/](deploy/native/)** - Native systemd deployment on Ubuntu
 
 Each folder contains complete setup scripts and documentation.
 
@@ -229,21 +229,22 @@ rust_chat/
 │       ├── logger.rs        # Colorized logging utilities
 │       ├── message.rs       # Message protocol
 │       └── network.rs       # TCP message handling
-├── deploy/
-│   ├── install.sh           # Automated native deployment script
-│   ├── rust-chat.service    # systemd service file
-│   ├── Caddyfile.native     # Caddy config for native deployment
-│   └── NATIVE_DEPLOYMENT.md # Complete native deployment guide
-├── docker/
-│   ├── Dockerfile           # Multi-stage Docker build
-│   ├── docker-compose.yml   # Docker orchestration with Caddy
-│   ├── Caddyfile           # Caddy config for Docker deployment
-│   ├── .dockerignore       # Docker build optimization
-│   └── DEPLOYMENT.md       # Docker deployment guide
-└── digital_ocean/
-    ├── setup-caddy.sh       # One-time Caddy installation & config
-    ├── start-server.sh      # Start server in tmux session
-    └── README.md           # Complete Digital Ocean tmux guide
+└── deploy/
+    ├── native/
+    │   ├── install.sh           # Automated native deployment script
+    │   ├── rust-chat.service    # systemd service file
+    │   ├── Caddyfile.native     # Caddy config for native deployment
+    │   └── NATIVE_DEPLOYMENT.md # Complete native deployment guide
+    ├── docker/
+    │   ├── Dockerfile           # Multi-stage Docker build
+    │   ├── docker-compose.yml   # Docker orchestration with Caddy
+    │   ├── Caddyfile           # Caddy config for Docker deployment
+    │   ├── .dockerignore       # Docker build optimization
+    │   └── DEPLOYMENT.md       # Docker deployment guide
+    └── digital_ocean/
+        ├── setup-caddy.sh       # One-time Caddy installation & config
+        ├── start-server.sh      # Start server in tmux session
+        └── README.md           # Complete Digital Ocean tmux guide
 ```
 
 ## Features in Detail
@@ -451,23 +452,23 @@ For production deployment with HTTPS/TLS encryption, choose the option that best
 
 | Option | Best For | Interactive Commands | Auto-Restart | Complexity |
 |--------|----------|---------------------|--------------|------------|
-| **[digital_ocean/](digital_ocean/)** | Quick start + server control | ✅ Yes | Manual | Easiest |
-| **[docker/](docker/)** | Containerized deployment | ❌ No | ✅ Yes | Easy |
-| **[deploy/](deploy/)** | Maximum performance | ❌ No | ✅ Yes | Medium |
+| **[deploy/digital_ocean/](deploy/digital_ocean/)** | Quick start + server control | ✅ Yes | Manual | Easiest |
+| **[deploy/docker/](deploy/docker/)** | Containerized deployment | ❌ No | ✅ Yes | Easy |
+| **[deploy/native/](deploy/native/)** | Maximum performance | ❌ No | ✅ Yes | Medium |
 
 ### Quick Links
 
-- **Digital Ocean (tmux + Caddy)** - [digital_ocean/README.md](digital_ocean/README.md)
+- **Digital Ocean (tmux + Caddy)** - [deploy/digital_ocean/README.md](deploy/digital_ocean/README.md)
   - Two scripts: setup and start
   - Use `/kick`, `/list`, etc. in tmux
   - Automatic HTTPS via Caddy
 
-- **Docker Deployment** - [docker/DEPLOYMENT.md](docker/DEPLOYMENT.md)
+- **Docker Deployment** - [deploy/docker/DEPLOYMENT.md](deploy/docker/DEPLOYMENT.md)
   - `docker-compose up -d`
   - Automatic HTTPS via Caddy
   - Isolated containers
 
-- **Native systemd** - [deploy/NATIVE_DEPLOYMENT.md](deploy/NATIVE_DEPLOYMENT.md)
+- **Native systemd** - [deploy/native/NATIVE_DEPLOYMENT.md](deploy/native/NATIVE_DEPLOYMENT.md)
   - systemd service with Caddy
   - Best performance (~50MB memory)
   - Full system integration

@@ -75,7 +75,7 @@ chmod +x $INSTALL_DIR/server
 
 echo ""
 echo "Step 8: Installing systemd service..."
-cp deploy/rust-chat.service $SERVICE_FILE
+cp deploy/native/rust-chat.service $SERVICE_FILE
 systemctl daemon-reload
 
 echo ""
@@ -97,7 +97,7 @@ echo "   Replace:"
 echo "   - your-email@example.com (with your email)"
 echo "   - chat.yourdomain.com (with your domain)"
 echo ""
-echo "   You can use the template at: deploy/Caddyfile.native"
+echo "   You can use the template at: deploy/native/Caddyfile.native"
 echo ""
 echo "2. Ensure your domain DNS is pointing to this server"
 echo ""
