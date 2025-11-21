@@ -16,7 +16,7 @@ A modern, colorful terminal-based chat application written in Rust with async/aw
 - 🛡️ **Smart Username Handling** - Automatic renaming for duplicate usernames
 - 🔁 **Auto-Reconnect** - Exponential backoff reconnection when server goes down
 - 🔒 **Security Hardened** - Rate limiting, input validation, connection limits, and memory safety
-- 🔐 **TLS/HTTPS Support** - Production-ready encryption via Caddy reverse proxy
+- 🔐 **Native TLS Support** - Built-in TLS encryption with Let's Encrypt certificates
 - 📊 **Rich Logging** - Categorized logs (INFO, ERROR, WARN, OK, SYSTEM, CHAT)
 - 📝 **Command History** - Full readline support with persistent command history (up to 1000 commands)
 - ⌨️ **Tab Completion** - Smart autocomplete for commands and usernames
@@ -113,10 +113,10 @@ CHAT_USERNAME="Bob" cargo run --bin client
 
 ### Production Deployment
 
-For production deployment with HTTPS/TLS encryption, see:
+For production deployment with TLS encryption, see:
 
-- **[deploy/digital_ocean/](deploy/digital_ocean/)** - Deploy on Digital Ocean with tmux + Caddy (simplest, interactive)
-- **[deploy/docker/](deploy/docker/)** - Docker deployment with automatic HTTPS
+- **[deploy/digital_ocean/](deploy/digital_ocean/)** - Deploy on Digital Ocean with tmux + native TLS (simplest, interactive)
+- **[deploy/docker/](deploy/docker/)** - Docker deployment with native TLS
 - **[deploy/native/](deploy/native/)** - Native systemd deployment on Ubuntu
 
 Each folder contains complete setup scripts and documentation.
@@ -256,14 +256,14 @@ rust_chat/
     │   └── NATIVE_DEPLOYMENT.md # Complete native deployment guide
     ├── docker/
     │   ├── Dockerfile           # Multi-stage Docker build
-    │   ├── docker-compose.yml   # Docker orchestration with Caddy
-    │   ├── Caddyfile           # Caddy config for Docker deployment
+    │   ├── docker-compose.yml   # Docker orchestration
     │   ├── .dockerignore       # Docker build optimization
     │   └── DEPLOYMENT.md       # Docker deployment guide
     └── digital_ocean/
-        ├── setup-caddy.sh       # One-time Caddy installation & config
-        ├── start-server.sh      # Start server in tmux session
-        └── README.md           # Complete Digital Ocean tmux guide
+        ├── setup-certificates.sh # Get Let's Encrypt TLS certificates
+        ├── start-server.sh      # Start server in tmux with TLS
+        ├── README.md            # Complete Digital Ocean guide
+        └── QUICK_START.md       # Quick reference
 ```
 
 ## Features in Detail
@@ -420,7 +420,7 @@ The application implements comprehensive security measures to protect against co
 | Memory Safety | 100% safe Rust |
 | Input Validation | Comprehensive |
 
-**Note**: For production deployment, consider adding TLS encryption, authentication, and E2E encryption for enhanced security.
+**Note**: For production deployment, TLS encryption is built-in. Consider adding authentication and E2E encryption for enhanced security.
 
 ### Message Protocol
 
@@ -465,34 +465,36 @@ cargo clippy --all-targets --all-features -- -D warnings
 
 ## Production Deployment
 
-For production deployment with HTTPS/TLS encryption, choose the option that best fits your needs:
+For production deployment with TLS encryption, choose the option that best fits your needs:
 
 ### Deployment Options
 
-| Option | Best For | Interactive Commands | Auto-Restart | Complexity |
-|--------|----------|---------------------|--------------|------------|
-| **[deploy/digital_ocean/](deploy/digital_ocean/)** | Quick start + server control | ✅ Yes | Manual | Easiest |
-| **[deploy/docker/](deploy/docker/)** | Containerized deployment | ❌ No | ✅ Yes | Easy |
-| **[deploy/native/](deploy/native/)** | Maximum performance | ❌ No | ✅ Yes | Medium |
+| Option | Best For | Interactive Commands | Auto-Restart | TLS Method | Complexity |
+|--------|----------|---------------------|--------------|------------|------------|
+| **[deploy/digital_ocean/](deploy/digital_ocean/)** | Quick start + server control | ✅ Yes | Manual | Native TLS | Easiest |
+| **[deploy/docker/](deploy/docker/)** | Containerized deployment | ❌ No | ✅ Yes | Native TLS | Easy |
+| **[deploy/native/](deploy/native/)** | Maximum performance | ❌ No | ✅ Yes | Native TLS | Medium |
 
 ### Quick Links
 
-- **Digital Ocean (tmux + Caddy)** - [deploy/digital_ocean/README.md](deploy/digital_ocean/README.md)
-  - Two scripts: setup and start
+- **Digital Ocean (tmux)** - [deploy/digital_ocean/README.md](deploy/digital_ocean/README.md)
+  - Interactive setup script for certificates
   - Use `/kick`, `/list`, etc. in tmux
-  - Automatic HTTPS via Caddy
+  - Native TLS with Let's Encrypt
+  - Port 8443
 
 - **Docker Deployment** - [deploy/docker/DEPLOYMENT.md](deploy/docker/DEPLOYMENT.md)
   - `docker-compose up -d`
-  - Automatic HTTPS via Caddy
+  - Mount Let's Encrypt certificates
   - Isolated containers
+  - Port 8443
 
 - **Native systemd** - [deploy/native/NATIVE_DEPLOYMENT.md](deploy/native/NATIVE_DEPLOYMENT.md)
-  - systemd service with Caddy
+  - systemd service
   - Best performance (~50MB memory)
   - Full system integration
 
-All options include automatic HTTPS/TLS via Caddy with Let's Encrypt.
+All options use native TLS encryption built into the Rust server with Let's Encrypt certificates.
 
 ## Dependencies
 
@@ -504,10 +506,16 @@ All options include automatic HTTPS/TLS via Caddy with Let's Encrypt.
 
 ### Server-specific
 - **rand** - Random username generation for collision handling
+- **tokio-rustls** - Native TLS implementation
+- **rustls** - Modern TLS library
+- **rustls-pemfile** - PEM certificate parsing
+
+### Client-specific
+- **webpki-roots** - Mozilla's root certificates for TLS validation
 
 ### Deployment
-- **Docker** - Container runtime
-- **Caddy** - Reverse proxy with automatic HTTPS
+- **Docker** - Container runtime (optional)
+- **Certbot** - Let's Encrypt certificate management
 
 ## Contributing
 
@@ -522,7 +530,7 @@ This project is available for educational and personal use.
 
 ## Future Enhancements
 
-- [x] **TLS/SSL encryption** - ✅ Implemented via Caddy reverse proxy
+- [x] **TLS/SSL encryption** - ✅ Implemented with native TLS (tokio-rustls)
 - [ ] End-to-end encryption for direct messages
 - [ ] User authentication system
 - [ ] Chat rooms/channels
