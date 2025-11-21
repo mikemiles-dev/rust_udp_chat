@@ -11,3 +11,6 @@ shared.workspace = true
 tokio.workspace = true
 rand.workspace = true
 rustyline.workspace = true
+tokio-rustls.workspace = true
+rustls.workspace = true
+rustls-pemfile.workspace = true

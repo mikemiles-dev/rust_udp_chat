@@ -48,11 +48,14 @@ RUN chown -R chatuser:chatuser /app
 
 USER chatuser
 
-# Expose internal port (Caddy will handle external TLS)
-EXPOSE 8080
+# Expose TLS port
+EXPOSE 8443
 
 # Set default environment variables
-ENV CHAT_SERVER_ADDR="0.0.0.0:8080"
+ENV CHAT_SERVER_ADDR="0.0.0.0:8443"
 ENV CHAT_SERVER_MAX_CLIENTS="100"
+# TLS is optional - if these paths don't exist, server runs without TLS
+ENV TLS_CERT_PATH=""
+ENV TLS_KEY_PATH=""
 
 ENTRYPOINT ["/app/server"]

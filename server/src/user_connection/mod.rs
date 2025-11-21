@@ -12,12 +12,61 @@ use shared::message::{ChatMessage, MessageTypes};
 use shared::network::{TcpMessageHandler, TcpMessageHandlerError};
 use std::collections::HashSet;
 use std::net::SocketAddr;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::TcpStream;
 use tokio::sync::{RwLock, broadcast};
+use tokio_rustls::server::TlsStream;
+
+pub enum ConnectionStream {
+    Plain(TcpStream),
+    Tls(TlsStream<TcpStream>),
+}
+
+impl AsyncRead for ConnectionStream {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            ConnectionStream::Plain(stream) => Pin::new(stream).poll_read(cx, buf),
+            ConnectionStream::Tls(stream) => Pin::new(stream).poll_read(cx, buf),
+        }
+    }
+}
+
+impl AsyncWrite for ConnectionStream {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        match self.get_mut() {
+            ConnectionStream::Plain(stream) => Pin::new(stream).poll_write(cx, buf),
+            ConnectionStream::Tls(stream) => Pin::new(stream).poll_write(cx, buf),
+        }
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            ConnectionStream::Plain(stream) => Pin::new(stream).poll_flush(cx),
+            ConnectionStream::Tls(stream) => Pin::new(stream).poll_flush(cx),
+        }
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            ConnectionStream::Plain(stream) => Pin::new(stream).poll_shutdown(cx),
+            ConnectionStream::Tls(stream) => Pin::new(stream).poll_shutdown(cx),
+        }
+    }
+}
 
 pub struct UserConnection {
-    socket: TcpStream,
+    socket: ConnectionStream,
     addr: SocketAddr,
     tx: broadcast::Sender<(ChatMessage, SocketAddr)>,
     server_commands: broadcast::Sender<ServerCommand>,
@@ -27,7 +76,8 @@ pub struct UserConnection {
 }
 
 impl TcpMessageHandler for UserConnection {
-    fn get_stream(&mut self) -> &mut tokio::net::TcpStream {
+    type Stream = ConnectionStream;
+    fn get_stream(&mut self) -> &mut Self::Stream {
         &mut self.socket
     }
 }
@@ -41,7 +91,25 @@ impl UserConnection {
         connected_clients: Arc<RwLock<HashSet<String>>>,
     ) -> Self {
         UserConnection {
-            socket,
+            socket: ConnectionStream::Plain(socket),
+            addr,
+            tx,
+            server_commands,
+            connected_clients,
+            chat_name: None,
+            rate_limiter: RateLimiter::new(RATE_LIMIT_MESSAGES, RATE_LIMIT_WINDOW),
+        }
+    }
+
+    pub fn new_tls(
+        socket: TlsStream<TcpStream>,
+        addr: SocketAddr,
+        tx: broadcast::Sender<(ChatMessage, SocketAddr)>,
+        server_commands: broadcast::Sender<ServerCommand>,
+        connected_clients: Arc<RwLock<HashSet<String>>>,
+    ) -> Self {
+        UserConnection {
+            socket: ConnectionStream::Tls(socket),
             addr,
             tx,
             server_commands,

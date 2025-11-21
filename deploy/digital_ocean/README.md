@@ -1,18 +1,16 @@
-# Digital Ocean Deployment with tmux + Caddy
+# Digital Ocean Deployment with Native TLS
 
-This guide shows how to deploy the Rust chat server on Digital Ocean using tmux for interactive server commands and Caddy for automatic HTTPS.
+This guide shows how to deploy the Rust chat server on Digital Ocean with native TLS support.
 
 ## Architecture
 
 ```
-Internet (HTTPS, port 443)
+Internet (TLS, port 8443)
     ↓
-Caddy (TLS termination, auto Let's Encrypt)
-    ↓
-localhost:8080 (plain TCP, local only)
-    ↓
-Rust Chat Server (in tmux session)
+Rust Chat Server with native TLS (in tmux session)
 ```
+
+**Note:** The server now has **native TLS support** built-in. No reverse proxy needed!
 
 ## Prerequisites
 
@@ -68,22 +66,37 @@ git clone https://github.com/yourusername/rust_chat.git
 cd rust_chat
 ```
 
-### 6. Run Caddy Setup (One-Time)
+### 6. Get TLS Certificates
 
 ```bash
-cd ~/rust_chat/deploy/digital_ocean
-sudo ./setup-caddy.sh
+# Install Certbot
+sudo apt update
+sudo apt install -y certbot
+
+# Get certificates (replace with your domain and email)
+sudo certbot certonly --standalone \
+  -d chat.yourdomain.com \
+  -m your-email@example.com \
+  --agree-tos \
+  --non-interactive
+
+# Certificates will be at:
+# /etc/letsencrypt/live/chat.yourdomain.com/fullchain.pem
+# /etc/letsencrypt/live/chat.yourdomain.com/privkey.pem
 ```
 
-This will:
-- Install Caddy
-- Configure firewall (UFW)
-- Set up automatic HTTPS
-- Create Caddyfile with your domain
+**Note:** Port 80 must be open temporarily for certificate verification.
 
-**Important:** Enter your actual domain and email when prompted!
+### 7. Configure Firewall
 
-### 7. Start Chat Server
+```bash
+# Allow SSH, and chat server port
+sudo ufw allow 22/tcp
+sudo ufw allow 8443/tcp
+sudo ufw enable
+```
+
+### 8. Start Chat Server
 
 ```bash
 cd ~/rust_chat/deploy/digital_ocean
@@ -93,9 +106,9 @@ cd ~/rust_chat/deploy/digital_ocean
 This will:
 - Build the server in release mode
 - Start it in a tmux session named `chat`
-- Bind to localhost:8080
+- Bind to 0.0.0.0:8443 with TLS
 
-### 8. Attach to Server Console
+### 9. Attach to Server Console
 
 ```bash
 tmux attach -t chat
@@ -109,7 +122,7 @@ Now you can use interactive commands:
 /quit              # Shutdown server
 ```
 
-### 9. Detach from Session
+### 10. Detach from Session
 
 **Press:** `Ctrl+B`, then `D`
 
@@ -156,14 +169,11 @@ cd ~/rust_chat/deploy/digital_ocean
 ### View Logs
 
 ```bash
-# Caddy logs
-sudo journalctl -u caddy -f
-
-# Caddy access logs
-sudo tail -f /var/log/caddy/chat-access.log
-
 # Server logs (attach to tmux)
 tmux attach -t chat
+
+# Or view system journal if using systemd
+sudo journalctl -u rust-chat -f
 ```
 
 ## Updating the Server
@@ -198,17 +208,20 @@ tmux kill-session -t chat
 ./start-server.sh
 ```
 
-### Can't connect via HTTPS
+### Can't connect via TLS
 
 ```bash
-# Check Caddy status
-sudo systemctl status caddy
+# Check server is running
+tmux attach -t chat
 
-# Check if certificate was obtained
-sudo caddy list-certificates
+# Check if certificates exist
+ls -la /etc/letsencrypt/live/chat.yourdomain.com/
 
-# View Caddy errors
-sudo journalctl -u caddy -n 50
+# Check firewall
+sudo ufw status
+
+# Test connection
+openssl s_client -connect chat.yourdomain.com:8443
 
 # Common issue: DNS not propagated yet
 dig chat.yourdomain.com  # Should show your droplet IP
@@ -217,8 +230,8 @@ dig chat.yourdomain.com  # Should show your droplet IP
 ### Port already in use
 
 ```bash
-# See what's using port 8080
-sudo netstat -tlnp | grep 8080
+# See what's using port 8443
+sudo netstat -tlnp | grep 8443
 
 # Kill the process
 sudo kill <PID>
@@ -231,11 +244,11 @@ sudo kill <PID>
 sudo ufw status
 
 # Should show:
-# 22/tcp  ALLOW
-# 80/tcp  ALLOW
-# 443/tcp ALLOW
+# 22/tcp   ALLOW
+# 8443/tcp ALLOW
 
-# If not, run setup-caddy.sh again
+# If not, allow the port
+sudo ufw allow 8443/tcp
 ```
 
 ### Can't attach to tmux
@@ -293,14 +306,13 @@ Ctrl+B, then $
 
 Edit `start-server.sh`:
 ```bash
-SERVER_ADDR="127.0.0.1:9000"  # Change port here
+SERVER_ADDR="0.0.0.0:9443"  # Change port here
 ```
 
-Then update Caddy:
+Then update firewall:
 ```bash
-sudo nano /etc/caddy/Caddyfile
-# Change: reverse_proxy localhost:9000
-sudo systemctl restart caddy
+sudo ufw allow 9443/tcp
+sudo ufw delete allow 8443/tcp
 ```
 
 ### Change Max Clients
@@ -312,10 +324,15 @@ MAX_CLIENTS="500"  # Change this
 
 ### Change Domain
 
+Get new certificates for the new domain:
 ```bash
-sudo nano /etc/caddy/Caddyfile
-# Update domain name
-sudo systemctl restart caddy
+sudo certbot certonly --standalone -d newdomain.com
+```
+
+Update `start-server.sh`:
+```bash
+TLS_CERT_PATH="/etc/letsencrypt/live/newdomain.com/fullchain.pem"
+TLS_KEY_PATH="/etc/letsencrypt/live/newdomain.com/privkey.pem"
 ```
 
 ## Security Best Practices
@@ -376,10 +393,10 @@ Attach to tmux and use:
 
 ```bash
 # See active connections to server
-sudo netstat -an | grep :8080 | grep ESTABLISHED | wc -l
+sudo netstat -an | grep :8443 | grep ESTABLISHED | wc -l
 
-# See connections to Caddy
-sudo netstat -an | grep :443 | grep ESTABLISHED | wc -l
+# Or use ss
+ss -tn | grep :8443 | wc -l
 ```
 
 ### Check Resource Usage
@@ -404,7 +421,7 @@ df -h
 # Create simple monitoring script
 cat > ~/monitor-chat.sh << 'MONITOR_EOF'
 #!/bin/bash
-CONNECTIONS=$(ss -tn | grep :8080 | wc -l)
+CONNECTIONS=$(ss -tn | grep :8443 | wc -l)
 if [ $CONNECTIONS -gt 50 ]; then
     echo "ALERT: $CONNECTIONS connections detected at $(date)" | tee -a ~/alerts.log
 fi
@@ -424,11 +441,11 @@ crontab -e
 # Create backup directory
 mkdir -p ~/backups
 
-# Backup Caddyfile
-sudo cp /etc/caddy/Caddyfile ~/backups/
+# Backup TLS certificates (if needed to migrate)
+sudo tar -czf ~/backups/letsencrypt-certs-$(date +%Y%m%d).tar.gz /etc/letsencrypt
 
-# Backup certificates (if needed to migrate)
-sudo tar -czf ~/backups/caddy-certs-$(date +%Y%m%d).tar.gz /var/lib/caddy
+# Backup start script configuration
+cp ~/rust_chat/deploy/digital_ocean/start-server.sh ~/backups/
 
 # Backup your code
 cd ~/rust_chat
@@ -438,13 +455,13 @@ git bundle create ~/backups/rust_chat-$(date +%Y%m%d).bundle --all
 ### Restore Process
 
 ```bash
-# Restore Caddyfile
-sudo cp ~/backups/Caddyfile /etc/caddy/
-sudo systemctl restart caddy
-
 # Restore certificates
-sudo tar -xzf ~/backups/caddy-certs-YYYYMMDD.tar.gz -C /
-sudo systemctl restart caddy
+sudo tar -xzf ~/backups/letsencrypt-certs-YYYYMMDD.tar.gz -C /
+
+# Restart server
+tmux kill-session -t chat
+cd ~/rust_chat/deploy/digital_ocean
+./start-server.sh
 ```
 
 ## Cost Optimization
@@ -471,7 +488,7 @@ Downsize/upsize as needed (requires droplet restart).
 
 ```bash
 cargo run --bin client
-# Enter server: chat.yourdomain.com:443
+# Enter server: tls://chat.yourdomain.com:8443
 # Enter username: YourName
 ```
 
@@ -493,10 +510,19 @@ ssh root@your-droplet
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 source "$HOME/.cargo/env"
 git clone https://github.com/yourusername/rust_chat.git
-cd rust_chat/digital_ocean
-sudo ./setup-caddy.sh
+cd rust_chat
+
+# Get TLS certificates
+sudo apt install certbot
+sudo certbot certonly --standalone -d chat.yourdomain.com
+
+# Configure firewall
+sudo ufw allow 22/tcp
+sudo ufw allow 8443/tcp
+sudo ufw enable
 
 # === Daily Usage ===
+cd ~/rust_chat/deploy/digital_ocean
 ./start-server.sh            # Start server
 tmux attach -t chat          # Use server commands
 Ctrl+B, D                    # Detach
@@ -506,7 +532,7 @@ tmux kill-session -t chat    # Stop server
 cd ~/rust_chat
 git pull
 tmux kill-session -t chat
-cd digital_ocean
+cd deploy/digital_ocean
 ./start-server.sh
 ```
 
@@ -515,14 +541,16 @@ cd digital_ocean
 **Q: Can I run multiple chat servers?**
 A: Yes, use different ports and tmux sessions:
 ```bash
-# In start-server.sh, change:
-TMUX_SESSION="chat2"
-SERVER_ADDR="127.0.0.1:8081"
+# Copy and edit start-server.sh:
+cp start-server.sh start-server2.sh
 
-# Add to Caddyfile:
-chat2.yourdomain.com {
-    reverse_proxy localhost:8081
-}
+# In start-server2.sh, change:
+TMUX_SESSION="chat2"
+SERVER_ADDR="0.0.0.0:9443"
+
+# Get certificates for second domain and update paths
+# Open firewall for new port
+sudo ufw allow 9443/tcp
 ```
 
 **Q: How do I see who's connected?**
@@ -534,8 +562,8 @@ A: Use systemd instead (see `deploy/NATIVE_DEPLOYMENT.md`) or add to crontab:
 */5 * * * * tmux has-session -t chat || cd ~/rust_chat/deploy/digital_ocean && ./start-server.sh
 ```
 
-**Q: How do I upgrade Caddy?**
-A: `sudo apt update && sudo apt upgrade caddy`
+**Q: How do I renew certificates?**
+A: Certificates auto-renew. Or manually: `sudo certbot renew`, then restart server.
 
 **Q: Can I use this on AWS/GCP?**
 A: Yes! Same scripts work on any Ubuntu server.
@@ -543,8 +571,8 @@ A: Yes! Same scripts work on any Ubuntu server.
 ## Support
 
 - **Application Issues**: Check `tmux attach -t chat` for error messages
-- **HTTPS Issues**: Check `sudo journalctl -u caddy -f`
-- **Connection Issues**: Check firewall `sudo ufw status`
+- **TLS Issues**: Verify certificates exist: `ls -la /etc/letsencrypt/live/chat.yourdomain.com/`
+- **Connection Issues**: Check firewall `sudo ufw status` and port `ss -tlnp | grep 8443`
 - **Performance**: Monitor with `htop` and `/list` command
 
 ## Next Steps
@@ -557,4 +585,4 @@ A: Yes! Same scripts work on any Ubuntu server.
 
 ---
 
-**Pro Tip:** Keep a second terminal window open with `sudo journalctl -u caddy -f` to watch Caddy logs while you use the server in tmux!
+**Pro Tip:** Use `tmux split-window` to watch server output and run commands in the same window! Press `Ctrl+B` then `"` to split horizontally.

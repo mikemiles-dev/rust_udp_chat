@@ -1,19 +1,25 @@
 use shared::logger;
 use shared::message::ChatMessage;
 use std::collections::HashSet;
+use std::fs::File;
+use std::io::BufReader;
 use std::net::SocketAddr;
+use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::{env, io};
 use tokio::net::TcpListener;
 use tokio::sync::{RwLock, broadcast};
+use rustls::ServerConfig;
+use rustls_pemfile::{certs, private_key};
+use tokio_rustls::TlsAcceptor;
 
 mod completer;
 mod input;
 mod readline_helper;
 mod user_connection;
 use input::ServerUserInput;
-use user_connection::UserConnection;
+use user_connection::{UserConnection, UserConnectionError};
 
 #[derive(Debug, Clone)]
 pub enum ServerCommand {
@@ -27,10 +33,11 @@ pub struct ChatServer {
     connected_clients: Arc<RwLock<HashSet<String>>>,
     max_clients: usize,
     active_connections: Arc<AtomicUsize>,
+    tls_acceptor: Option<TlsAcceptor>,
 }
 
 impl ChatServer {
-    async fn new(bind_addr: &str, max_clients: usize) -> io::Result<Self> {
+    async fn new(bind_addr: &str, max_clients: usize, tls_acceptor: Option<TlsAcceptor>) -> io::Result<Self> {
         let (tx, _rx) = broadcast::channel(max_clients * 16); // Allow message buffering
         let (cmd_tx, _cmd_rx) = broadcast::channel(100); // Server commands channel
         let listener = TcpListener::bind(bind_addr).await?;
@@ -42,6 +49,7 @@ impl ChatServer {
             connected_clients: Arc::new(RwLock::new(HashSet::new())),
             max_clients,
             active_connections: Arc::new(AtomicUsize::new(0)),
+            tls_acceptor,
         })
     }
 
@@ -76,12 +84,30 @@ impl ChatServer {
                             let tx_clone = self.broadcaster.clone();
                             let cmd_tx_clone = self.server_commands.clone();
                             let active_connections_clone = self.active_connections.clone();
-
-                            let mut client_connection =
-                                UserConnection::new(socket, addr, tx_clone, cmd_tx_clone, self.connected_clients.clone());
+                            let tls_acceptor = self.tls_acceptor.clone();
+                            let connected_clients = self.connected_clients.clone();
 
                             tokio::spawn(async move {
-                                if let Err(e) = client_connection.handle().await {
+                                // Wrap socket in TLS if configured
+                                let result = if let Some(acceptor) = tls_acceptor {
+                                    match acceptor.accept(socket).await {
+                                        Ok(tls_stream) => {
+                                            let mut client_connection =
+                                                UserConnection::new_tls(tls_stream, addr, tx_clone, cmd_tx_clone, connected_clients);
+                                            client_connection.handle().await
+                                        }
+                                        Err(e) => {
+                                            logger::log_error(&format!("TLS handshake failed for {}: {:?}", addr, e));
+                                            Err(UserConnectionError::IoError(io::Error::new(io::ErrorKind::Other, "TLS handshake failed")))
+                                        }
+                                    }
+                                } else {
+                                    let mut client_connection =
+                                        UserConnection::new(socket, addr, tx_clone, cmd_tx_clone, connected_clients);
+                                    client_connection.handle().await
+                                };
+
+                                if let Err(e) = result {
                                     logger::log_error(&format!("Error handling client {}: {:?}", addr, e));
                                 }
 
@@ -169,16 +195,69 @@ impl ChatServer {
     }
 }
 
+fn load_tls_config(cert_path: &str, key_path: &str) -> io::Result<ServerConfig> {
+    let cert_file = File::open(cert_path)
+        .map_err(|e| io::Error::new(io::ErrorKind::NotFound, format!("Certificate file not found: {}", e)))?;
+    let key_file = File::open(key_path)
+        .map_err(|e| io::Error::new(io::ErrorKind::NotFound, format!("Key file not found: {}", e)))?;
+
+    let mut cert_reader = BufReader::new(cert_file);
+    let mut key_reader = BufReader::new(key_file);
+
+    let certs = certs(&mut cert_reader)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("Invalid certificate: {}", e)))?;
+
+    let key = private_key(&mut key_reader)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("Invalid private key: {}", e)))?
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "No private key found"))?;
+
+    let config = ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(certs, key)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("TLS config error: {}", e)))?;
+
+    Ok(config)
+}
+
 #[tokio::main]
 async fn main() -> io::Result<()> {
     const CHAT_SERVER_ADDR_ENV_VAR: &str = "CHAT_SERVER_ADDR";
     const CHAT_SERVER_MAX_CLIENTS_ENV_VAR: &str = "CHAT_SERVER_MAX_CLIENTS";
+    const TLS_CERT_PATH_ENV_VAR: &str = "TLS_CERT_PATH";
+    const TLS_KEY_PATH_ENV_VAR: &str = "TLS_KEY_PATH";
+
     let chat_server_addr = env::var(CHAT_SERVER_ADDR_ENV_VAR).unwrap_or("0.0.0.0:8080".to_string());
     let max_clients = env::var(CHAT_SERVER_MAX_CLIENTS_ENV_VAR)
         .unwrap_or("100".to_string())
         .parse::<usize>()
         .unwrap_or(100);
-    let mut server = ChatServer::new(&chat_server_addr, max_clients).await?;
+
+    // Check if TLS is configured
+    let tls_acceptor = match (env::var(TLS_CERT_PATH_ENV_VAR), env::var(TLS_KEY_PATH_ENV_VAR)) {
+        (Ok(cert_path), Ok(key_path)) if Path::new(&cert_path).exists() && Path::new(&key_path).exists() => {
+            logger::log_info("TLS enabled - loading certificates...");
+            match load_tls_config(&cert_path, &key_path) {
+                Ok(config) => {
+                    logger::log_success("TLS certificates loaded successfully");
+                    Some(TlsAcceptor::from(Arc::new(config)))
+                }
+                Err(e) => {
+                    logger::log_error(&format!("Failed to load TLS config: {}", e));
+                    logger::log_warning("Starting server WITHOUT TLS encryption");
+                    None
+                }
+            }
+        }
+        _ => {
+            logger::log_info("TLS not configured - running without encryption");
+            logger::log_info(&format!("To enable TLS, set {} and {} environment variables", TLS_CERT_PATH_ENV_VAR, TLS_KEY_PATH_ENV_VAR));
+            None
+        }
+    };
+
+    let mut server = ChatServer::new(&chat_server_addr, max_clients, tls_acceptor).await?;
+
     logger::log_success(&format!("Chat Server started at {}", chat_server_addr));
     logger::log_info(&format!(
         "To change address, set {} environment variable",

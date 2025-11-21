@@ -5,12 +5,18 @@ use shared::message::{ChatMessage, ChatMessageError, MessageTypes};
 use shared::network::TcpMessageHandler;
 use std::collections::HashSet;
 use std::io;
-use std::net::{AddrParseError, SocketAddr};
+use std::net::AddrParseError;
+use std::pin::Pin;
 use std::sync::{Arc, RwLock};
+use std::task::{Context, Poll};
 use std::time::Duration;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, ReadBuf};
 use tokio::net::TcpStream;
 use tokio::time::sleep;
+use tokio_rustls::client::TlsStream;
+use tokio_rustls::TlsConnector;
+use rustls::ClientConfig;
+use rustls::pki_types::ServerName;
 
 #[derive(Debug)]
 pub enum ChatClientError {
@@ -37,9 +43,56 @@ impl From<ChatMessageError> for ChatClientError {
     }
 }
 
+pub enum ClientStream {
+    Plain(TcpStream),
+    Tls(TlsStream<TcpStream>),
+}
+
+impl AsyncRead for ClientStream {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        match self.get_mut() {
+            ClientStream::Plain(stream) => Pin::new(stream).poll_read(cx, buf),
+            ClientStream::Tls(stream) => Pin::new(stream).poll_read(cx, buf),
+        }
+    }
+}
+
+impl AsyncWrite for ClientStream {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        match self.get_mut() {
+            ClientStream::Plain(stream) => Pin::new(stream).poll_write(cx, buf),
+            ClientStream::Tls(stream) => Pin::new(stream).poll_write(cx, buf),
+        }
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        match self.get_mut() {
+            ClientStream::Plain(stream) => Pin::new(stream).poll_flush(cx),
+            ClientStream::Tls(stream) => Pin::new(stream).poll_flush(cx),
+        }
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        match self.get_mut() {
+            ClientStream::Plain(stream) => Pin::new(stream).poll_shutdown(cx),
+            ClientStream::Tls(stream) => Pin::new(stream).poll_shutdown(cx),
+        }
+    }
+}
+
 pub struct ChatClient {
-    connection: TcpStream,
-    server_addr: SocketAddr,
+    connection: ClientStream,
+    server_host: String,
+    server_port: u16,
+    use_tls: bool,
     chat_name: String,
     last_dm_sender: Option<String>,
     connected_users: Arc<RwLock<HashSet<String>>>,
@@ -48,17 +101,60 @@ pub struct ChatClient {
 
 impl ChatClient {
     pub async fn new(server_addr: &str, name: String) -> Result<Self, ChatClientError> {
-        let server_addr: SocketAddr = server_addr.parse()?;
-        let stream = TcpStream::connect(server_addr).await?;
+        // Parse address - could be host:port or just host
+        let (host, port, use_tls) = Self::parse_server_addr(server_addr)?;
+
+        let stream = TcpStream::connect(format!("{}:{}", host, port)).await?;
+
+        let connection = if use_tls {
+            logger::log_info("Establishing TLS connection...");
+            let mut root_cert_store = rustls::RootCertStore::empty();
+            root_cert_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+
+            let config = ClientConfig::builder()
+                .with_root_certificates(root_cert_store)
+                .with_no_client_auth();
+
+            let connector = TlsConnector::from(Arc::new(config));
+            let server_name = ServerName::try_from(host.clone())
+                .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "Invalid server name"))?;
+
+            let tls_stream = connector.connect(server_name, stream).await?;
+            logger::log_success("TLS connection established");
+            ClientStream::Tls(tls_stream)
+        } else {
+            ClientStream::Plain(stream)
+        };
 
         Ok(ChatClient {
-            connection: stream,
-            server_addr,
+            connection,
+            server_host: host,
+            server_port: port,
+            use_tls,
             chat_name: name,
             last_dm_sender: None,
             connected_users: Arc::new(RwLock::new(HashSet::new())),
             was_kicked: false,
         })
+    }
+
+    fn parse_server_addr(addr: &str) -> Result<(String, u16, bool), ChatClientError> {
+        // Check if address starts with tls://
+        let (use_tls, addr) = if let Some(stripped) = addr.strip_prefix("tls://") {
+            (true, stripped)
+        } else {
+            (false, addr)
+        };
+
+        // Parse host:port
+        if let Some((host, port)) = addr.rsplit_once(':') {
+            let port = port.parse::<u16>()
+                .map_err(|_| ChatClientError::InvalidAddress)?;
+            Ok((host.to_string(), port, use_tls))
+        } else {
+            // No port specified, use default
+            Ok((addr.to_string(), 8080, use_tls))
+        }
     }
 
     pub async fn join_server(&mut self) -> Result<(), ChatClientError> {
@@ -84,13 +180,34 @@ impl ChatClient {
 
         loop {
             logger::log_info(&format!(
-                "Attempting to reconnect to {} (attempt {})...",
-                self.server_addr, attempt
+                "Attempting to reconnect to {}:{} (attempt {})...",
+                self.server_host, self.server_port, attempt
             ));
 
-            match TcpStream::connect(self.server_addr).await {
+            match TcpStream::connect(format!("{}:{}", self.server_host, self.server_port)).await {
                 Ok(stream) => {
-                    self.connection = stream;
+                    // Re-establish TLS if needed
+                    let connection = if self.use_tls {
+                        logger::log_info("Re-establishing TLS connection...");
+                        let mut root_cert_store = rustls::RootCertStore::empty();
+                        root_cert_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+
+                        let config = ClientConfig::builder()
+                            .with_root_certificates(root_cert_store)
+                            .with_no_client_auth();
+
+                        let connector = TlsConnector::from(Arc::new(config));
+                        let server_name = ServerName::try_from(self.server_host.clone())
+                            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "Invalid server name"))?;
+
+                        let tls_stream = connector.connect(server_name, stream).await?;
+                        logger::log_success("TLS connection re-established");
+                        ClientStream::Tls(tls_stream)
+                    } else {
+                        ClientStream::Plain(stream)
+                    };
+
+                    self.connection = connection;
                     logger::log_success("Reconnected to server!");
 
                     // Rejoin the server with the same username
@@ -341,7 +458,8 @@ impl ChatClient {
 }
 
 impl TcpMessageHandler for ChatClient {
-    fn get_stream(&mut self) -> &mut tokio::net::TcpStream {
+    type Stream = ClientStream;
+    fn get_stream(&mut self) -> &mut Self::Stream {
         &mut self.connection
     }
 }

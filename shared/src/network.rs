@@ -1,6 +1,5 @@
 use crate::message::ChatMessage;
-use tokio::io::AsyncReadExt;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 pub const CHUNK_SIZE: usize = 8192;
 pub const MAX_MESSAGE_SIZE: usize = 8192; // 8KB max message size
@@ -12,7 +11,8 @@ pub enum TcpMessageHandlerError {
 
 #[allow(async_fn_in_trait)]
 pub trait TcpMessageHandler {
-    fn get_stream(&mut self) -> &mut tokio::net::TcpStream;
+    type Stream: AsyncRead + AsyncWrite + Unpin;
+    fn get_stream(&mut self) -> &mut Self::Stream;
 
     async fn send_message_chunked(&mut self, message: ChatMessage) -> Result<(), std::io::Error> {
         let message_bytes: Vec<u8> = message.into();

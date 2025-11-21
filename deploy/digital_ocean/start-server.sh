@@ -1,15 +1,17 @@
 #!/bin/bash
 
-# Chat Server Start Script for tmux
-# This script starts the Rust chat server in a tmux session
+# Chat Server Start Script for tmux with TLS
+# This script starts the Rust chat server in a tmux session with TLS encryption
 
 set -e
 
 # Configuration
 TMUX_SESSION="chat"
-SERVER_ADDR="127.0.0.1:8080"
+SERVER_ADDR="0.0.0.0:8443"
 MAX_CLIENTS="100"
 PROJECT_DIR="$HOME/rust_chat"
+TLS_CERT_PATH="/etc/letsencrypt/live/chat.yourdomain.com/fullchain.pem"
+TLS_KEY_PATH="/etc/letsencrypt/live/chat.yourdomain.com/privkey.pem"
 
 echo "=== Rust Chat Server Starter ==="
 echo ""
@@ -57,10 +59,23 @@ echo "Configuration:"
 echo "  Address: $SERVER_ADDR"
 echo "  Max Clients: $MAX_CLIENTS"
 echo "  Session: $TMUX_SESSION"
+
+# Check if TLS certificates exist
+if [ -f "$TLS_CERT_PATH" ] && [ -f "$TLS_KEY_PATH" ]; then
+    echo "  TLS: ENABLED (certificates found)"
+    echo "  Cert: $TLS_CERT_PATH"
+    echo "  Key: $TLS_KEY_PATH"
+    TLS_CONFIG="TLS_CERT_PATH=$TLS_CERT_PATH TLS_KEY_PATH=$TLS_KEY_PATH"
+else
+    echo "  TLS: DISABLED (certificates not found)"
+    echo "  Note: Server will run without encryption"
+    echo "  To enable TLS, update certificate paths in this script"
+    TLS_CONFIG=""
+fi
 echo ""
 
 # Create tmux session and run server
-tmux new-session -d -s $TMUX_SESSION "CHAT_SERVER_ADDR=$SERVER_ADDR CHAT_SERVER_MAX_CLIENTS=$MAX_CLIENTS ./target/release/server"
+tmux new-session -d -s $TMUX_SESSION "CHAT_SERVER_ADDR=$SERVER_ADDR CHAT_SERVER_MAX_CLIENTS=$MAX_CLIENTS $TLS_CONFIG ./target/release/server"
 
 echo "✓ Server started in tmux session '$TMUX_SESSION'"
 echo ""
@@ -78,4 +93,11 @@ echo "  /quit       # Shutdown server"
 echo ""
 echo "To attach now, run:"
 echo "  tmux attach -t $TMUX_SESSION"
+echo ""
+echo "Client connection:"
+if [ -f "$TLS_CERT_PATH" ]; then
+    echo "  Use: tls://chat.yourdomain.com:8443"
+else
+    echo "  Use: chat.yourdomain.com:8443"
+fi
 echo ""

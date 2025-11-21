@@ -1,4 +1,6 @@
-# Deployment Guide
+# Deployment Guide - Docker with Native TLS
+
+**Note:** This deployment uses native TLS in the Rust server. No reverse proxy needed!
 
 ## Quick Start: Digital Ocean Deployment
 
@@ -31,55 +33,68 @@ ssh root@<your-droplet-ip>
 
 ```bash
 git clone https://github.com/yourusername/rust_chat.git
-cd rust_chat
+cd rust_chat/deploy/docker
 ```
 
-### 5. Configure Caddy
+### 5. Get TLS Certificates
 
-Edit the `Caddyfile`:
 ```bash
-nano Caddyfile
+# Install Certbot
+sudo apt update
+sudo apt install -y certbot
+
+# Get certificates (replace with your domain and email)
+sudo certbot certonly --standalone \
+  -d chat.yourdomain.com \
+  -m your-email@example.com \
+  --agree-tos \
+  --non-interactive
 ```
 
-Replace:
-- `your-email@example.com` → Your actual email (for Let's Encrypt)
-- `chat.yourdomain.com` → Your actual domain
+Certificates will be created at:
+- `/etc/letsencrypt/live/chat.yourdomain.com/fullchain.pem`
+- `/etc/letsencrypt/live/chat.yourdomain.com/privkey.pem`
 
-### 6. Deploy
+### 6. Copy Certificates to Project
+
+```bash
+# Create certs directory
+mkdir -p certs
+
+# Copy certificates (as root since certbot certs are protected)
+sudo cp /etc/letsencrypt/live/chat.yourdomain.com/fullchain.pem certs/
+sudo cp /etc/letsencrypt/live/chat.yourdomain.com/privkey.pem certs/
+
+# Make certificates readable by the container
+sudo chmod 644 certs/*.pem
+```
+
+### 7. Deploy
 
 ```bash
 docker-compose up -d
 ```
 
-That's it! Caddy will automatically:
-- Obtain Let's Encrypt certificates
-- Configure HTTPS
-- Set up automatic renewal
-
-### 7. Verify Deployment
+### 8. Verify Deployment
 
 Check logs:
 ```bash
-docker-compose logs -f
+docker-compose logs -f chat_server
 ```
 
 You should see:
 ```
-caddy_proxy     | ... certificate obtained successfully
-chat_server     | [OK] Chat Server started at 0.0.0.0:8080
+TLS enabled - loading certificates...
+TLS certificates loaded successfully
+Chat Server started at 0.0.0.0:8443
 ```
 
-Check certificates:
-```bash
-docker exec caddy_proxy caddy list-certificates
-```
-
-### 8. Test Connection
+### 9. Test Connection
 
 From your local machine:
 ```bash
 cargo run --bin client
-# Enter: chat.yourdomain.com:443
+# Enter: tls://chat.yourdomain.com:8443
 ```
 
 ## Firewall Configuration
@@ -87,17 +102,16 @@ cargo run --bin client
 If using UFW (Ubuntu):
 ```bash
 # Allow SSH
-ufw allow 22/tcp
+sudo ufw allow 22/tcp
 
-# Allow HTTP (for Let's Encrypt challenges)
-ufw allow 80/tcp
-
-# Allow HTTPS
-ufw allow 443/tcp
+# Allow chat server port
+sudo ufw allow 8443/tcp
 
 # Enable firewall
-ufw enable
+sudo ufw enable
 ```
+
+**Note:** Port 80 must be open temporarily when getting certificates with Certbot.
 
 ## Monitoring
 

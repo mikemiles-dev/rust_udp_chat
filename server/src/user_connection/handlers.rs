@@ -5,19 +5,20 @@ use rand::Rng;
 use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::net::TcpStream;
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::{RwLock, broadcast};
 
 use super::error::UserConnectionError;
 use super::rate_limiting::RateLimiter;
 
-// Helper struct to implement TcpMessageHandler for TcpStream
-struct StreamWrapper<'a> {
-    stream: &'a mut TcpStream,
+// Helper struct to implement TcpMessageHandler for any AsyncRead + AsyncWrite stream
+struct StreamWrapper<'a, S> {
+    stream: &'a mut S,
 }
 
-impl<'a> TcpMessageHandler for StreamWrapper<'a> {
-    fn get_stream(&mut self) -> &mut TcpStream {
+impl<'a, S: AsyncRead + AsyncWrite + Unpin> TcpMessageHandler for StreamWrapper<'a, S> {
+    type Stream = S;
+    fn get_stream(&mut self) -> &mut Self::Stream {
         self.stream
     }
 }
@@ -39,11 +40,11 @@ impl<'a> MessageHandlers<'a> {
         format!("{}_{}", username, random_suffix)
     }
 
-    pub async fn process_message(
+    pub async fn process_message<S: AsyncRead + AsyncWrite + Unpin>(
         &self,
         message: ChatMessage,
         rate_limiter: &mut RateLimiter,
-        stream: &mut TcpStream,
+        stream: &mut S,
         chat_name: &mut Option<String>,
     ) -> Result<(), UserConnectionError> {
         let mut tcp_handler = StreamWrapper { stream };
@@ -85,9 +86,9 @@ impl<'a> MessageHandlers<'a> {
         Ok(())
     }
 
-    async fn process_list_users(
+    async fn process_list_users<S: AsyncRead + AsyncWrite + Unpin>(
         &self,
-        tcp_handler: &mut StreamWrapper<'_>,
+        tcp_handler: &mut StreamWrapper<'_, S>,
     ) -> Result<(), UserConnectionError> {
         let clients = self.connected_clients.clone();
         let clients = clients.read().await;
@@ -138,10 +139,10 @@ impl<'a> MessageHandlers<'a> {
         }
     }
 
-    async fn process_direct_message(
+    async fn process_direct_message<S: AsyncRead + AsyncWrite + Unpin>(
         &self,
         content: Option<String>,
-        tcp_handler: &mut StreamWrapper<'_>,
+        tcp_handler: &mut StreamWrapper<'_, S>,
         chat_name: &Option<String>,
     ) -> Result<(), UserConnectionError> {
         let content = content.ok_or(UserConnectionError::InvalidMessage)?;
@@ -206,10 +207,10 @@ impl<'a> MessageHandlers<'a> {
         }
     }
 
-    async fn process_join(
+    async fn process_join<S: AsyncRead + AsyncWrite + Unpin>(
         &self,
         username: Option<String>,
-        tcp_handler: &mut StreamWrapper<'_>,
+        tcp_handler: &mut StreamWrapper<'_, S>,
         chat_name: &mut Option<String>,
     ) -> Result<(), UserConnectionError> {
         let content = username.ok_or(UserConnectionError::InvalidMessage)?;

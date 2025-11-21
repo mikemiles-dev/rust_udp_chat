@@ -1,7 +1,7 @@
 version: '3.8'
 
 services:
-  # Rust Chat Server
+  # Rust Chat Server with native TLS support
   chat_server:
     build:
       context: ../..
@@ -9,44 +9,21 @@ services:
     container_name: rust_chat_server
     restart: unless-stopped
     environment:
-      - CHAT_SERVER_ADDR=0.0.0.0:8080
+      - CHAT_SERVER_ADDR=0.0.0.0:8443
       - CHAT_SERVER_MAX_CLIENTS=100
-    networks:
-      - chat_network
-    # Internal port only - not exposed to host
-    expose:
-      - "8080"
-
-  # Caddy reverse proxy with automatic HTTPS
-  caddy:
-    image: caddy:2-alpine
-    container_name: caddy_proxy
-    restart: unless-stopped
+      # TLS configuration (mount certificates as volumes)
+      - TLS_CERT_PATH=/certs/fullchain.pem
+      - TLS_KEY_PATH=/certs/privkey.pem
     ports:
-      # HTTP (redirects to HTTPS)
-      - "80:80"
-      # HTTPS with TLS
-      - "443:443"
-      # For local development (optional)
+      # TLS-encrypted chat port
       - "8443:8443"
     volumes:
-      # Caddyfile configuration
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      # Persistent certificate storage
-      - caddy_data:/data
-      - caddy_config:/config
-      # Logs
-      - ./logs/caddy:/var/log/caddy
+      # Mount your TLS certificates here
+      # Update the paths to point to your actual certificates
+      - ./certs:/certs:ro
     networks:
       - chat_network
-    depends_on:
-      - chat_server
 
 networks:
   chat_network:
     driver: bridge
-
-volumes:
-  # Persistent storage for Let's Encrypt certificates
-  caddy_data:
-  caddy_config:
