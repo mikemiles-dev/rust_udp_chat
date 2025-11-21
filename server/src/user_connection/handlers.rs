@@ -2,8 +2,8 @@ use shared::logger;
 use shared::message::{ChatMessage, MessageTypes};
 use shared::network::TcpMessageHandler;
 use rand::Rng;
-use std::collections::HashSet;
-use std::net::SocketAddr;
+use std::collections::{HashMap, HashSet};
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::{RwLock, broadcast};
@@ -31,6 +31,7 @@ pub struct MessageHandlers<'a> {
     pub addr: SocketAddr,
     pub tx: &'a broadcast::Sender<(ChatMessage, SocketAddr)>,
     pub connected_clients: &'a Arc<RwLock<HashSet<String>>>,
+    pub user_ips: &'a Arc<RwLock<HashMap<String, IpAddr>>>,
 }
 
 impl<'a> MessageHandlers<'a> {
@@ -271,6 +272,11 @@ impl<'a> MessageHandlers<'a> {
         }
 
         if let Some(chat_name) = &chat_name {
+            // Store the user's IP address
+            let mut ips = self.user_ips.write().await;
+            ips.insert(chat_name.clone(), self.addr.ip());
+            drop(ips);
+
             let join_message =
                 ChatMessage::try_new(MessageTypes::Join, Some(chat_name.clone().into_bytes()))
                     .map_err(|_| UserConnectionError::InvalidMessage)?;
@@ -364,6 +370,13 @@ impl<'a> MessageHandlers<'a> {
         clients.remove(&old_name);
         clients.insert(new_name.clone());
         drop(clients);
+
+        // Update user_ips mapping
+        let mut ips = self.user_ips.write().await;
+        if let Some(ip) = ips.remove(&old_name) {
+            ips.insert(new_name.clone(), ip);
+        }
+        drop(ips);
 
         // Update the chat_name
         *chat_name = Some(new_name.clone());

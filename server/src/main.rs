@@ -1,9 +1,9 @@
 use shared::logger;
 use shared::message::ChatMessage;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::BufReader;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -25,6 +25,7 @@ use user_connection::{UserConnection, UserConnectionError};
 pub enum ServerCommand {
     Kick(String),
     Rename { old_name: String, new_name: String },
+    Ban(IpAddr),
 }
 
 pub struct ChatServer {
@@ -32,6 +33,10 @@ pub struct ChatServer {
     broadcaster: broadcast::Sender<(ChatMessage, SocketAddr)>,
     server_commands: broadcast::Sender<ServerCommand>,
     connected_clients: Arc<RwLock<HashSet<String>>>,
+    /// Maps username to their IP address
+    user_ips: Arc<RwLock<HashMap<String, IpAddr>>>,
+    /// Set of banned IP addresses
+    banned_ips: Arc<RwLock<HashSet<IpAddr>>>,
     max_clients: usize,
     active_connections: Arc<AtomicUsize>,
     tls_acceptor: Option<TlsAcceptor>,
@@ -48,6 +53,8 @@ impl ChatServer {
             broadcaster: tx,
             server_commands: cmd_tx,
             connected_clients: Arc::new(RwLock::new(HashSet::new())),
+            user_ips: Arc::new(RwLock::new(HashMap::new())),
+            banned_ips: Arc::new(RwLock::new(HashSet::new())),
             max_clients,
             active_connections: Arc::new(AtomicUsize::new(0)),
             tls_acceptor,
@@ -69,6 +76,18 @@ impl ChatServer {
                 result = self.listener.accept() => {
                     match result {
                         Ok((socket, addr)) => {
+                            // Check if IP is banned
+                            let banned = self.banned_ips.read().await;
+                            if banned.contains(&addr.ip()) {
+                                logger::log_warning(&format!(
+                                    "Rejected connection from banned IP: {}",
+                                    addr.ip()
+                                ));
+                                drop(socket);
+                                continue;
+                            }
+                            drop(banned);
+
                             // Check connection limit
                             let current_connections = self.active_connections.load(Ordering::Relaxed);
                             if current_connections >= self.max_clients {
@@ -87,6 +106,7 @@ impl ChatServer {
                             let active_connections_clone = self.active_connections.clone();
                             let tls_acceptor = self.tls_acceptor.clone();
                             let connected_clients = self.connected_clients.clone();
+                            let user_ips = self.user_ips.clone();
 
                             tokio::spawn(async move {
                                 // Wrap socket in TLS if configured
@@ -94,7 +114,7 @@ impl ChatServer {
                                     match acceptor.accept(socket).await {
                                         Ok(tls_stream) => {
                                             let mut client_connection =
-                                                UserConnection::new_tls(tls_stream, addr, tx_clone, cmd_tx_clone, connected_clients);
+                                                UserConnection::new_tls(tls_stream, addr, tx_clone, cmd_tx_clone, connected_clients, user_ips);
                                             client_connection.handle().await
                                         }
                                         Err(e) => {
@@ -104,7 +124,7 @@ impl ChatServer {
                                     }
                                 } else {
                                     let mut client_connection =
-                                        UserConnection::new(socket, addr, tx_clone, cmd_tx_clone, connected_clients);
+                                        UserConnection::new(socket, addr, tx_clone, cmd_tx_clone, connected_clients, user_ips);
                                     client_connection.handle().await
                                 };
 
@@ -144,6 +164,18 @@ impl ChatServer {
                                 }
                                 Ok(ServerUserInput::Rename { old_name, new_name }) => {
                                     self.handle_rename(old_name, new_name).await;
+                                }
+                                Ok(ServerUserInput::Ban(username)) => {
+                                    self.handle_ban_user(username).await;
+                                }
+                                Ok(ServerUserInput::BanIp(ip)) => {
+                                    self.handle_ban_ip(ip).await;
+                                }
+                                Ok(ServerUserInput::Unban(ip)) => {
+                                    self.handle_unban(ip).await;
+                                }
+                                Ok(ServerUserInput::BanList) => {
+                                    self.handle_banlist().await;
                                 }
                                 Ok(ServerUserInput::Help) => {
                                     self.handle_help();
@@ -229,11 +261,77 @@ impl ChatServer {
         }
     }
 
+    async fn handle_ban_user(&self, username: String) {
+        // Look up the user's IP
+        let user_ips = self.user_ips.read().await;
+        let ip = match user_ips.get(&username) {
+            Some(ip) => *ip,
+            None => {
+                logger::log_error(&format!("User '{}' not found or not connected", username));
+                return;
+            }
+        };
+        drop(user_ips);
+
+        // Add to banned IPs
+        let mut banned = self.banned_ips.write().await;
+        if banned.insert(ip) {
+            drop(banned);
+            logger::log_warning(&format!("Banned IP {} (user '{}')", ip, username));
+
+            // Kick the user and disconnect them
+            if self.server_commands.send(ServerCommand::Ban(ip)).is_ok() {
+                logger::log_info(&format!("Disconnecting user '{}' from banned IP", username));
+            }
+        } else {
+            logger::log_info(&format!("IP {} is already banned", ip));
+        }
+    }
+
+    async fn handle_ban_ip(&self, ip: IpAddr) {
+        let mut banned = self.banned_ips.write().await;
+        if banned.insert(ip) {
+            drop(banned);
+            logger::log_warning(&format!("Banned IP {}", ip));
+
+            // Disconnect any users from this IP
+            if self.server_commands.send(ServerCommand::Ban(ip)).is_ok() {
+                logger::log_info(&format!("Disconnecting users from banned IP {}", ip));
+            }
+        } else {
+            logger::log_info(&format!("IP {} is already banned", ip));
+        }
+    }
+
+    async fn handle_unban(&self, ip: IpAddr) {
+        let mut banned = self.banned_ips.write().await;
+        if banned.remove(&ip) {
+            logger::log_success(&format!("Unbanned IP {}", ip));
+        } else {
+            logger::log_error(&format!("IP {} is not banned", ip));
+        }
+    }
+
+    async fn handle_banlist(&self) {
+        let banned = self.banned_ips.read().await;
+        if banned.is_empty() {
+            logger::log_info("No IPs are currently banned.");
+        } else {
+            logger::log_info(&format!("Banned IPs ({}):", banned.len()));
+            for ip in banned.iter() {
+                logger::log_info(&format!("  - {}", ip));
+            }
+        }
+    }
+
     fn handle_help(&self) {
         logger::log_info("Available server commands:");
         logger::log_info("  /list                    - List all connected users");
         logger::log_info("  /kick <user>             - Kick a user from the server");
         logger::log_info("  /rename <user> <newname> - Rename a user");
+        logger::log_info("  /ban <user|ip>           - Ban a user by name or IP address");
+        logger::log_info("  /unban <ip>              - Unban an IP address");
+        logger::log_info("  /banlist                 - List all banned IPs");
         logger::log_info("  /help                    - Show this help message");
         logger::log_info("  /quit                    - Shutdown the server");
     }

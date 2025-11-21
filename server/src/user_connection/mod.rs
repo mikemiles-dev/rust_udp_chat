@@ -10,8 +10,8 @@ use crate::ServerCommand;
 use shared::logger;
 use shared::message::{ChatMessage, MessageTypes};
 use shared::network::{TcpMessageHandler, TcpMessageHandlerError};
-use std::collections::HashSet;
-use std::net::SocketAddr;
+use std::collections::{HashMap, HashSet};
+use std::net::{IpAddr, SocketAddr};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -71,6 +71,7 @@ pub struct UserConnection {
     tx: broadcast::Sender<(ChatMessage, SocketAddr)>,
     server_commands: broadcast::Sender<ServerCommand>,
     connected_clients: Arc<RwLock<HashSet<String>>>,
+    user_ips: Arc<RwLock<HashMap<String, IpAddr>>>,
     chat_name: Option<String>,
     rate_limiter: RateLimiter,
 }
@@ -89,6 +90,7 @@ impl UserConnection {
         tx: broadcast::Sender<(ChatMessage, SocketAddr)>,
         server_commands: broadcast::Sender<ServerCommand>,
         connected_clients: Arc<RwLock<HashSet<String>>>,
+        user_ips: Arc<RwLock<HashMap<String, IpAddr>>>,
     ) -> Self {
         UserConnection {
             socket: ConnectionStream::Plain(socket),
@@ -96,6 +98,7 @@ impl UserConnection {
             tx,
             server_commands,
             connected_clients,
+            user_ips,
             chat_name: None,
             rate_limiter: RateLimiter::new(RATE_LIMIT_MESSAGES, RATE_LIMIT_WINDOW),
         }
@@ -107,6 +110,7 @@ impl UserConnection {
         tx: broadcast::Sender<(ChatMessage, SocketAddr)>,
         server_commands: broadcast::Sender<ServerCommand>,
         connected_clients: Arc<RwLock<HashSet<String>>>,
+        user_ips: Arc<RwLock<HashMap<String, IpAddr>>>,
     ) -> Self {
         UserConnection {
             socket: ConnectionStream::Tls(Box::new(socket)),
@@ -114,6 +118,7 @@ impl UserConnection {
             tx,
             server_commands,
             connected_clients,
+            user_ips,
             chat_name: None,
             rate_limiter: RateLimiter::new(RATE_LIMIT_MESSAGES, RATE_LIMIT_WINDOW),
         }
@@ -181,6 +186,13 @@ impl UserConnection {
                         Ok(ServerCommand::Rename { old_name, new_name }) => {
                             if let Some(chat_name) = &self.chat_name
                                 && chat_name == &old_name {
+                                // Update user_ips mapping
+                                let mut ips = self.user_ips.write().await;
+                                if let Some(ip) = ips.remove(&old_name) {
+                                    ips.insert(new_name.clone(), ip);
+                                }
+                                drop(ips);
+
                                 // Update the local chat_name
                                 self.chat_name = Some(new_name.clone());
 
@@ -204,6 +216,20 @@ impl UserConnection {
                                 }
                             }
                         }
+                        Ok(ServerCommand::Ban(ip)) => {
+                            // Disconnect if our IP matches
+                            if self.addr.ip() == ip {
+                                logger::log_info(&format!("User {:?} banned (IP {})", self.chat_name, ip));
+                                // Send error message to client before disconnecting
+                                if let Ok(ban_msg) = ChatMessage::try_new(
+                                    MessageTypes::Error,
+                                    Some("You have been banned from the server".as_bytes().to_vec())
+                                ) {
+                                    let _ = self.send_message_chunked(ban_msg).await;
+                                }
+                                break;
+                            }
+                        }
                         Err(_) => {
                             // Channel closed, ignore
                         }
@@ -216,6 +242,13 @@ impl UserConnection {
         if let Some(chat_name) = &self.chat_name {
             let mut clients = self.connected_clients.write().await;
             clients.remove(chat_name);
+            drop(clients);
+
+            // Remove from user_ips mapping
+            let mut ips = self.user_ips.write().await;
+            ips.remove(chat_name);
+            drop(ips);
+
             if let Ok(leave_message) =
                 ChatMessage::try_new(MessageTypes::Leave, Some(chat_name.clone().into_bytes()))
             {
@@ -232,6 +265,7 @@ impl UserConnection {
             addr: self.addr,
             tx: &self.tx,
             connected_clients: &self.connected_clients,
+            user_ips: &self.user_ips,
         };
 
         handlers

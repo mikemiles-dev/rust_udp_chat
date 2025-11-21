@@ -1,11 +1,17 @@
 use shared::input::{UserInput, UserInputError};
 
+use std::net::IpAddr;
+
 #[derive(Debug)]
 pub enum ServerUserInput {
     Help,
     ListUsers,
     Kick(String),
     Rename { old_name: String, new_name: String },
+    Ban(String),      // Ban by username (will resolve to IP)
+    BanIp(IpAddr),    // Ban by IP directly
+    Unban(IpAddr),    // Unban by IP
+    BanList,          // List all banned IPs
     Quit,
 }
 
@@ -43,6 +49,26 @@ impl TryFrom<&str> for ServerUserInput {
                             new_name: parts[1].to_string(),
                         })
                     }
+                } else if let Some(target) = trimmed.strip_prefix("/ban ") {
+                    let target = target.trim();
+                    if target.is_empty() {
+                        Err(UserInputError::InvalidCommand)
+                    } else if let Ok(ip) = target.parse::<IpAddr>() {
+                        // It's an IP address
+                        Ok(ServerUserInput::BanIp(ip))
+                    } else {
+                        // It's a username
+                        Ok(ServerUserInput::Ban(target.to_string()))
+                    }
+                } else if let Some(ip_str) = trimmed.strip_prefix("/unban ") {
+                    let ip_str = ip_str.trim();
+                    if let Ok(ip) = ip_str.parse::<IpAddr>() {
+                        Ok(ServerUserInput::Unban(ip))
+                    } else {
+                        Err(UserInputError::InvalidCommand)
+                    }
+                } else if trimmed == "/banlist" {
+                    Ok(ServerUserInput::BanList)
                 } else if trimmed.starts_with('/') {
                     Err(UserInputError::InvalidCommand)
                 } else {
