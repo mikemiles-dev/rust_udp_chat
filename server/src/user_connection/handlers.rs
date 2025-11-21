@@ -81,6 +81,10 @@ impl<'a> MessageHandlers<'a> {
                 self.process_direct_message(message.content_as_string(), &mut tcp_handler, chat_name)
                     .await?;
             }
+            MessageTypes::RenameRequest => {
+                self.process_rename_request(message.content_as_string(), &mut tcp_handler, chat_name)
+                    .await?;
+            }
             _ => (),
         }
         Ok(())
@@ -275,6 +279,117 @@ impl<'a> MessageHandlers<'a> {
                 .map_err(UserConnectionError::BroadcastError)?;
             logger::log_system(&format!("{} has joined the chat", chat_name));
         }
+        Ok(())
+    }
+
+    async fn process_rename_request<S: AsyncRead + AsyncWrite + Unpin>(
+        &self,
+        new_name: Option<String>,
+        tcp_handler: &mut StreamWrapper<'_, S>,
+        chat_name: &mut Option<String>,
+    ) -> Result<(), UserConnectionError> {
+        let new_name = new_name.ok_or(UserConnectionError::InvalidMessage)?;
+
+        // Validate new username length
+        if new_name.is_empty() || new_name.len() > MAX_USERNAME_LENGTH {
+            logger::log_warning(&format!(
+                "Invalid username length for rename from {}: {} chars",
+                self.addr,
+                new_name.len()
+            ));
+            let error_msg = ChatMessage::try_new(
+                MessageTypes::Error,
+                Some(b"Invalid username length (1-32 characters)".to_vec()),
+            )
+            .map_err(|_| UserConnectionError::InvalidMessage)?;
+            tcp_handler
+                .send_message_chunked(error_msg)
+                .await
+                .map_err(UserConnectionError::IoError)?;
+            return Ok(());
+        }
+
+        // Validate username characters (alphanumeric, underscore, hyphen only)
+        if !new_name
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
+        {
+            logger::log_warning(&format!(
+                "Invalid username characters for rename from {}: {}",
+                self.addr, new_name
+            ));
+            let error_msg = ChatMessage::try_new(
+                MessageTypes::Error,
+                Some(b"Invalid characters (only alphanumeric, underscore, hyphen allowed)".to_vec()),
+            )
+            .map_err(|_| UserConnectionError::InvalidMessage)?;
+            tcp_handler
+                .send_message_chunked(error_msg)
+                .await
+                .map_err(UserConnectionError::IoError)?;
+            return Ok(());
+        }
+
+        // Check if user has joined first
+        let old_name = match chat_name {
+            Some(name) => name.clone(),
+            None => {
+                logger::log_warning(&format!(
+                    "User at {} tried to rename before joining",
+                    self.addr
+                ));
+                return Err(UserConnectionError::InvalidMessage);
+            }
+        };
+
+        // Try to claim the new name
+        let mut clients = self.connected_clients.write().await;
+
+        // Check if new name is already taken
+        if clients.contains(&new_name) {
+            drop(clients);
+            let error_msg = ChatMessage::try_new(
+                MessageTypes::Error,
+                Some(format!("Username '{}' is already taken", new_name).into_bytes()),
+            )
+            .map_err(|_| UserConnectionError::InvalidMessage)?;
+            tcp_handler
+                .send_message_chunked(error_msg)
+                .await
+                .map_err(UserConnectionError::IoError)?;
+            return Ok(());
+        }
+
+        // Remove old name and add new name
+        clients.remove(&old_name);
+        clients.insert(new_name.clone());
+        drop(clients);
+
+        // Update the chat_name
+        *chat_name = Some(new_name.clone());
+
+        logger::log_success(&format!("User '{}' renamed to '{}'", old_name, new_name));
+
+        // Send UserRename message back to the client
+        let rename_message = ChatMessage::try_new(
+            MessageTypes::UserRename,
+            Some(new_name.clone().into_bytes()),
+        )
+        .map_err(|_| UserConnectionError::InvalidMessage)?;
+        tcp_handler
+            .send_message_chunked(rename_message)
+            .await
+            .map_err(UserConnectionError::IoError)?;
+
+        // Broadcast rename announcement to all clients
+        let announcement = format!("{} is now known as {}", old_name, new_name);
+        let broadcast_message =
+            ChatMessage::try_new(MessageTypes::ChatMessage, Some(announcement.into_bytes()))
+                .map_err(|_| UserConnectionError::InvalidMessage)?;
+        self.tx
+            .send((broadcast_message, self.addr))
+            .map_err(UserConnectionError::BroadcastError)?;
+
         Ok(())
     }
 }

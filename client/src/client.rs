@@ -391,11 +391,20 @@ impl ChatClient {
                 logger::log_info("  /list - List all users");
                 logger::log_info("  /dm <username> <message> - Send direct message");
                 logger::log_info("  /r <message> - Reply to last direct message");
+                logger::log_info("  /rename <new_name> - Change your username");
                 logger::log_info("  /quit - Exit the chat");
                 Ok(())
             }
             input::ClientUserInput::ListUsers => {
                 let message = ChatMessage::try_new(MessageTypes::ListUsers, None)?;
+                self.send_message_chunked(message).await?;
+                Ok(())
+            }
+            input::ClientUserInput::Rename(new_name) => {
+                let message = ChatMessage::try_new(
+                    MessageTypes::RenameRequest,
+                    Some(new_name.into_bytes()),
+                )?;
                 self.send_message_chunked(message).await?;
                 Ok(())
             }

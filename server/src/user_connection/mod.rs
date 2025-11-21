@@ -161,7 +161,7 @@ impl UserConnection {
                         }
                     }
                 }
-                // Branch 3: Server commands (kick, etc.)
+                // Branch 3: Server commands (kick, rename, etc.)
                 result = cmd_rx.recv() => {
                     match result {
                         Ok(ServerCommand::Kick(username)) => {
@@ -176,6 +176,32 @@ impl UserConnection {
                                     let _ = self.send_message_chunked(kick_msg).await;
                                 }
                                 break;
+                            }
+                        }
+                        Ok(ServerCommand::Rename { old_name, new_name }) => {
+                            if let Some(chat_name) = &self.chat_name
+                                && chat_name == &old_name {
+                                // Update the local chat_name
+                                self.chat_name = Some(new_name.clone());
+
+                                // Send UserRename message to client
+                                if let Ok(rename_msg) = ChatMessage::try_new(
+                                    MessageTypes::UserRename,
+                                    Some(new_name.clone().into_bytes())
+                                ) {
+                                    let _ = self.send_message_chunked(rename_msg).await;
+                                }
+
+                                logger::log_info(&format!("User {} renamed to {} by server", old_name, new_name));
+
+                                // Broadcast announcement to all clients
+                                let announcement = format!("{} is now known as {} (renamed by server)", old_name, new_name);
+                                if let Ok(broadcast_msg) = ChatMessage::try_new(
+                                    MessageTypes::ChatMessage,
+                                    Some(announcement.into_bytes())
+                                ) {
+                                    let _ = self.tx.send((broadcast_msg, self.addr));
+                                }
                             }
                         }
                         Err(_) => {

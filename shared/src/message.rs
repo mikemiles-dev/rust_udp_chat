@@ -7,6 +7,7 @@ pub enum MessageTypes {
     ListUsers,
     DirectMessage,
     Error,
+    RenameRequest,
     Unknown(u8),
 }
 
@@ -20,6 +21,7 @@ impl From<u8> for MessageTypes {
             5 => MessageTypes::ListUsers,
             6 => MessageTypes::DirectMessage,
             7 => MessageTypes::Error,
+            8 => MessageTypes::RenameRequest,
             other => MessageTypes::Unknown(other),
         }
     }
@@ -115,6 +117,7 @@ impl From<ChatMessage> for Vec<u8> {
             MessageTypes::ListUsers => 5,
             MessageTypes::DirectMessage => 6,
             MessageTypes::Error => 7,
+            MessageTypes::RenameRequest => 8,
             MessageTypes::Unknown(val) => val,
         });
         if let Some(content) = message.content {

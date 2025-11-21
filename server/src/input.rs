@@ -5,6 +5,7 @@ pub enum ServerUserInput {
     Help,
     ListUsers,
     Kick(String),
+    Rename { old_name: String, new_name: String },
     Quit,
 }
 
@@ -31,6 +32,16 @@ impl TryFrom<&str> for ServerUserInput {
                         Err(UserInputError::InvalidCommand)
                     } else {
                         Ok(ServerUserInput::Kick(username.to_string()))
+                    }
+                } else if let Some(args) = trimmed.strip_prefix("/rename ") {
+                    let parts: Vec<&str> = args.split_whitespace().collect();
+                    if parts.len() != 2 {
+                        Err(UserInputError::InvalidCommand)
+                    } else {
+                        Ok(ServerUserInput::Rename {
+                            old_name: parts[0].to_string(),
+                            new_name: parts[1].to_string(),
+                        })
                     }
                 } else if trimmed.starts_with('/') {
                     Err(UserInputError::InvalidCommand)

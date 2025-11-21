@@ -7,6 +7,7 @@ pub enum ClientUserInput {
     Message(String),
     DirectMessage { recipient: String, message: String },
     Reply(String),
+    Rename(String),
     Quit,
 }
 
@@ -42,6 +43,14 @@ impl TryFrom<&str> for ClientUserInput {
                 } else {
                     let message = parts[1..].join(" ");
                     Ok(ClientUserInput::Reply(message))
+                }
+            }
+            "/rename" => {
+                if parts.len() < 2 {
+                    Err(UserInputError::InvalidCommand)
+                } else {
+                    let new_name = parts[1].to_string();
+                    Ok(ClientUserInput::Rename(new_name))
                 }
             }
             _ => {

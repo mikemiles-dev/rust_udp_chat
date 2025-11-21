@@ -24,6 +24,7 @@ use user_connection::{UserConnection, UserConnectionError};
 #[derive(Debug, Clone)]
 pub enum ServerCommand {
     Kick(String),
+    Rename { old_name: String, new_name: String },
 }
 
 pub struct ChatServer {
@@ -141,6 +142,9 @@ impl ChatServer {
                                 Ok(ServerUserInput::Kick(username)) => {
                                     self.handle_kick(username).await;
                                 }
+                                Ok(ServerUserInput::Rename { old_name, new_name }) => {
+                                    self.handle_rename(old_name, new_name).await;
+                                }
                                 Ok(ServerUserInput::Help) => {
                                     self.handle_help();
                                 }
@@ -186,12 +190,52 @@ impl ChatServer {
         }
     }
 
+    async fn handle_rename(&self, old_name: String, new_name: String) {
+        let mut clients = self.connected_clients.write().await;
+
+        // Check if the user to rename exists
+        if !clients.contains(&old_name) {
+            logger::log_error(&format!("User '{}' not found", old_name));
+            return;
+        }
+
+        // Check if the new name is already taken
+        if clients.contains(&new_name) {
+            logger::log_error(&format!("Username '{}' is already taken", new_name));
+            return;
+        }
+
+        // Validate new username
+        if new_name.is_empty() || new_name.len() > 32 {
+            logger::log_error("Invalid username length (1-32 characters)");
+            return;
+        }
+        if !new_name.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-') {
+            logger::log_error("Invalid characters (only alphanumeric, underscore, hyphen allowed)");
+            return;
+        }
+
+        // Update the connected_clients set
+        clients.remove(&old_name);
+        clients.insert(new_name.clone());
+        drop(clients);
+
+        // Send rename command to all connections - the matching one will handle it
+        if self.server_commands.send(ServerCommand::Rename {
+            old_name: old_name.clone(),
+            new_name: new_name.clone(),
+        }).is_ok() {
+            logger::log_success(&format!("Renaming user '{}' to '{}'", old_name, new_name));
+        }
+    }
+
     fn handle_help(&self) {
         logger::log_info("Available server commands:");
-        logger::log_info("  /list           - List all connected users");
-        logger::log_info("  /kick <user>    - Kick a user from the server");
-        logger::log_info("  /help           - Show this help message");
-        logger::log_info("  /quit           - Shutdown the server");
+        logger::log_info("  /list                    - List all connected users");
+        logger::log_info("  /kick <user>             - Kick a user from the server");
+        logger::log_info("  /rename <user> <newname> - Rename a user");
+        logger::log_info("  /help                    - Show this help message");
+        logger::log_info("  /quit                    - Shutdown the server");
     }
 }
 
