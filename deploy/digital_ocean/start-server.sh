@@ -26,13 +26,6 @@ TLS_KEY_PATH="/etc/letsencrypt/live/chat.yourdomain.com/privkey.pem"
 echo "=== Rust Chat Server Startup ==="
 echo ""
 
-# Check if tmux is installed
-if ! command -v tmux &> /dev/null; then
-    echo "Error: tmux is not installed"
-    echo "Install with: sudo apt-get install -y tmux"
-    exit 1
-fi
-
 # Check if project directory exists
 if [ ! -d "$PROJECT_DIR" ]; then
     echo "Error: Project directory not found at $PROJECT_DIR"

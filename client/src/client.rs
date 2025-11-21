@@ -104,7 +104,14 @@ impl ChatClient {
         // Parse address - could be host:port or just host
         let (host, port, use_tls) = Self::parse_server_addr(server_addr)?;
 
-        let stream = TcpStream::connect(format!("{}:{}", host, port)).await?;
+        logger::log_info(&format!("Connecting to {}:{}...", host, port));
+        let stream = TcpStream::connect(format!("{}:{}", host, port)).await
+            .map_err(|e| {
+                logger::log_error(&format!("Failed to connect to {}:{} - {}", host, port, e));
+                ChatClientError::IoError
+            })?;
+
+        logger::log_success(&format!("TCP connection established to {}:{}", host, port));
 
         let connection = if use_tls {
             logger::log_info("Establishing TLS connection...");
@@ -117,12 +124,20 @@ impl ChatClient {
 
             let connector = TlsConnector::from(Arc::new(config));
             let server_name = ServerName::try_from(host.clone())
-                .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "Invalid server name"))?;
+                .map_err(|e| {
+                    logger::log_error(&format!("Invalid server name '{}': {:?}", host, e));
+                    io::Error::new(io::ErrorKind::InvalidInput, "Invalid server name")
+                })?;
 
-            let tls_stream = connector.connect(server_name, stream).await?;
+            let tls_stream = connector.connect(server_name, stream).await
+                .map_err(|e| {
+                    logger::log_error(&format!("TLS handshake failed: {}", e));
+                    ChatClientError::IoError
+                })?;
             logger::log_success("TLS connection established");
             ClientStream::Tls(tls_stream)
         } else {
+            logger::log_info("Using plain TCP (no encryption)");
             ClientStream::Plain(stream)
         };
 
