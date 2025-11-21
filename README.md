@@ -49,7 +49,7 @@ docker run -it --rm ghcr.io/mikemiles-dev/rust_chat-client:latest
 
 # Or specify everything upfront
 docker run -it --rm \
-  -e CHAT_SERVER=tls://chat.milesrust.chat:8443 \
+  -e CHAT_SERVER=tls://milesrust.chat:8443 \
   -e CHAT_USERNAME=YourName \
   ghcr.io/mikemiles-dev/rust_chat-client:latest
 ```
@@ -95,14 +95,14 @@ Try out the chat by connecting to the live instance:
 ```bash
 cargo run --bin client
 # When prompted:
-# Server: tls://chat.milesrust.chat:8443
+# Server: tls://milesrust.chat:8443
 # Username: YourName
 ```
 
 Or use environment variables:
 
 ```bash
-CHAT_SERVER="tls://chat.milesrust.chat:8443" CHAT_USERNAME="YourName" cargo run --bin client
+CHAT_SERVER="tls://milesrust.chat:8443" CHAT_USERNAME="YourName" cargo run --bin client
 ```
 
 **Option 2: Local Development**
@@ -454,7 +454,7 @@ The client is available as a Docker image for easy deployment and testing:
 ```bash
 # Connect to live server
 docker run -it --rm \
-  -e CHAT_SERVER=tls://chat.milesrust.chat:8443 \
+  -e CHAT_SERVER=tls://milesrust.chat:8443 \
   -e CHAT_USERNAME=Alice \
   ghcr.io/michaelmileusnich/rust_chat-client:latest
 

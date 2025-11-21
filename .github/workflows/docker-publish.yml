@@ -75,7 +75,7 @@ jobs:
           echo "### Connect to Live Server" >> $GITHUB_STEP_SUMMARY
           echo '```bash' >> $GITHUB_STEP_SUMMARY
           echo "docker run -it --rm \\" >> $GITHUB_STEP_SUMMARY
-          echo "  -e CHAT_SERVER=tls://chat.milesrust.chat:8443 \\" >> $GITHUB_STEP_SUMMARY
+          echo "  -e CHAT_SERVER=tls://milesrust.chat:8443 \\" >> $GITHUB_STEP_SUMMARY
           echo "  -e CHAT_USERNAME=YourName \\" >> $GITHUB_STEP_SUMMARY
           echo "  ghcr.io/${{ env.IMAGE_NAME }}:latest" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
