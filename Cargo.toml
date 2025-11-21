@@ -20,3 +20,9 @@ tokio-rustls = "0.26"
 rustls = "0.23"
 rustls-pemfile = "2.1"
 webpki-roots = "0.26"
+
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1
+panic = "abort"
