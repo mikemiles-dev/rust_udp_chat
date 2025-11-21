@@ -13,7 +13,7 @@ COPY server ./server
 RUN cargo build --release --bin client
 
 # Runtime stage
-FROM debian:bookworm-slim
+FROM debian:trixie-slim
 
 # Install ca-certificates for TLS
 RUN apt-get update && \
