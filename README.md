@@ -39,6 +39,23 @@ The project is organized into three crates:
 
 ## Quick Start
 
+### Using Docker (Easiest)
+
+Connect to the live server instantly with Docker:
+
+```bash
+# Interactive mode (will prompt for username)
+docker run -it --rm ghcr.io/michaelmileusnich/rust_chat-client:latest
+
+# Or specify everything upfront
+docker run -it --rm \
+  -e CHAT_SERVER=tls://chat.rustmiles.chat:8443 \
+  -e CHAT_USERNAME=YourName \
+  ghcr.io/michaelmileusnich/rust_chat-client:latest
+```
+
+No installation required! Docker will automatically pull the latest client image.
+
 ### Local Development
 
 #### Starting the Server
@@ -421,7 +438,52 @@ Messages are sent over TCP with a custom chunked protocol that supports:
 - User list requests
 - Error messages
 
-## Building
+## Docker Image
+
+The client is available as a Docker image for easy deployment and testing:
+
+### Image Information
+
+- **Registry**: GitHub Container Registry (ghcr.io)
+- **Image**: `ghcr.io/michaelmileusnich/rust_chat-client`
+- **Tags**: `latest`, version tags (e.g., `v1.0.0`), branch tags
+- **Platforms**: linux/amd64, linux/arm64
+
+### Usage Examples
+
+```bash
+# Connect to live server
+docker run -it --rm \
+  -e CHAT_SERVER=tls://chat.rustmiles.chat:8443 \
+  -e CHAT_USERNAME=Alice \
+  ghcr.io/michaelmileusnich/rust_chat-client:latest
+
+# Connect to local server
+docker run -it --rm \
+  -e CHAT_SERVER=127.0.0.1:8080 \
+  -e CHAT_USERNAME=Bob \
+  ghcr.io/michaelmileusnich/rust_chat-client:latest
+
+# Interactive mode (prompts for server and username)
+docker run -it --rm ghcr.io/michaelmileusnich/rust_chat-client:latest
+
+# Use specific version
+docker run -it --rm ghcr.io/michaelmileusnich/rust_chat-client:v1.0.0
+```
+
+### Building Your Own Image
+
+```bash
+# Build the client image
+docker build -f client/Dockerfile -t rust-chat-client .
+
+# Run your local build
+docker run -it --rm rust-chat-client
+```
+
+The image is automatically built and published via GitHub Actions on every push to main.
+
+## Building from Source
 
 ### Development Build
 
@@ -490,6 +552,7 @@ See **[deploy/digital_ocean/QUICK_START.md](deploy/digital_ocean/QUICK_START.md)
 ### Deployment
 - **Certbot** - Let's Encrypt certificate management
 - **tmux** - Terminal multiplexer for server management
+- **Docker** - Optional containerized client deployment
 
 ## Contributing
 
