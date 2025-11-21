@@ -98,7 +98,7 @@ impl ChatServer {
                                         }
                                         Err(e) => {
                                             logger::log_error(&format!("TLS handshake failed for {}: {:?}", addr, e));
-                                            Err(UserConnectionError::IoError(io::Error::new(io::ErrorKind::Other, "TLS handshake failed")))
+                                            Err(UserConnectionError::IoError(io::Error::other("TLS handshake failed")))
                                         }
                                     }
                                 } else {

@@ -45,7 +45,7 @@ impl From<ChatMessageError> for ChatClientError {
 
 pub enum ClientStream {
     Plain(TcpStream),
-    Tls(TlsStream<TcpStream>),
+    Tls(Box<TlsStream<TcpStream>>),
 }
 
 impl AsyncRead for ClientStream {
@@ -135,7 +135,7 @@ impl ChatClient {
                     ChatClientError::IoError
                 })?;
             logger::log_success("TLS connection established");
-            ClientStream::Tls(tls_stream)
+            ClientStream::Tls(Box::new(tls_stream))
         } else {
             logger::log_info("Using plain TCP (no encryption)");
             ClientStream::Plain(stream)
@@ -217,7 +217,7 @@ impl ChatClient {
 
                         let tls_stream = connector.connect(server_name, stream).await?;
                         logger::log_success("TLS connection re-established");
-                        ClientStream::Tls(tls_stream)
+                        ClientStream::Tls(Box::new(tls_stream))
                     } else {
                         ClientStream::Plain(stream)
                     };

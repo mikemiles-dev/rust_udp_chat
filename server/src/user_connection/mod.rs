@@ -22,7 +22,7 @@ use tokio_rustls::server::TlsStream;
 
 pub enum ConnectionStream {
     Plain(TcpStream),
-    Tls(TlsStream<TcpStream>),
+    Tls(Box<TlsStream<TcpStream>>),
 }
 
 impl AsyncRead for ConnectionStream {
@@ -109,7 +109,7 @@ impl UserConnection {
         connected_clients: Arc<RwLock<HashSet<String>>>,
     ) -> Self {
         UserConnection {
-            socket: ConnectionStream::Tls(socket),
+            socket: ConnectionStream::Tls(Box::new(socket)),
             addr,
             tx,
             server_commands,
