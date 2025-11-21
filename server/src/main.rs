@@ -111,15 +111,23 @@ impl ChatServer {
                             tokio::spawn(async move {
                                 // Wrap socket in TLS if configured
                                 let result = if let Some(acceptor) = tls_acceptor {
-                                    match acceptor.accept(socket).await {
-                                        Ok(tls_stream) => {
+                                    // Add timeout to TLS handshake to prevent hanging connections
+                                    match tokio::time::timeout(
+                                        std::time::Duration::from_secs(30),
+                                        acceptor.accept(socket)
+                                    ).await {
+                                        Ok(Ok(tls_stream)) => {
                                             let mut client_connection =
                                                 UserConnection::new_tls(tls_stream, addr, tx_clone, cmd_tx_clone, connected_clients, user_ips);
                                             client_connection.handle().await
                                         }
-                                        Err(e) => {
+                                        Ok(Err(e)) => {
                                             logger::log_error(&format!("TLS handshake failed for {}: {:?}", addr, e));
                                             Err(UserConnectionError::IoError(io::Error::other("TLS handshake failed")))
+                                        }
+                                        Err(_) => {
+                                            logger::log_error(&format!("TLS handshake timed out for {}", addr));
+                                            Err(UserConnectionError::IoError(io::Error::other("TLS handshake timed out")))
                                         }
                                     }
                                 } else {
