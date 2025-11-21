@@ -22,7 +22,7 @@ A modern, colorful terminal-based chat application written in Rust with async/aw
 - ⌨️ **Tab Completion** - Smart autocomplete for commands and usernames
 - 💡 **Inline Hints** - Visual hints showing available completions as you type
 - 🚀 **Production Ready** - Docker and native systemd deployment options
-- 👮 **Admin Commands** - Server-side `/kick` and user management
+- 👮 **Admin Commands** - Server-side `/kick`, `/ban`, `/rename` and user management
 
 ## Architecture
 
@@ -68,10 +68,15 @@ The server will start on `0.0.0.0:8080` by default.
 
 You can use server commands:
 ```
-/help       # Show available commands
-/list       # List connected users
-/kick USER  # Kick a user
-/quit       # Shutdown server
+/help        # Show available commands
+/list        # List connected users
+/kick USER   # Kick a user
+/rename U N  # Rename user U to N
+/ban USER    # Ban a user (by IP)
+/ban IP      # Ban an IP directly
+/unban IP    # Unban an IP
+/banlist     # List banned IPs
+/quit        # Shutdown server
 ```
 
 #### Server Configuration
@@ -147,6 +152,7 @@ Once connected to the server, clients can use the following commands:
 - `/list` - List all connected users
 - `/dm <USERNAME> <MESSAGE>` - Send a direct message to a specific user
 - `/r <MESSAGE>` - Reply to the last user who sent you a DM
+- `/rename <NEW_NAME>` - Change your username
 - Any other text - Send a message to all connected users
 
 ### Server Commands
@@ -156,6 +162,11 @@ While the server is running, administrators can use these commands:
 - `/help` or `/h` - Display available server commands
 - `/list` - Show all currently connected users with count
 - `/kick <username>` - Kick a user from the server
+- `/rename <username> <newname>` - Rename a user
+- `/ban <username>` - Ban a user by their username (resolves to IP)
+- `/ban <ip>` - Ban an IP address directly
+- `/unban <ip>` - Unban an IP address
+- `/banlist` - List all banned IP addresses
 - `/quit` or `/q` - Gracefully shutdown the server
 
 ### Command History & Autocomplete
@@ -222,16 +233,23 @@ Alice /r Perfect! Let's discuss the project.
 [12:35:15] [INFO]   - Alice
 [12:35:15] [INFO]   - Bob
 [12:35:30] [SYSTEM] Charlie has joined the chat
-/list
-[12:35:35] [INFO] Connected users (3):
-[12:35:35] [INFO]   - Alice
-[12:35:35] [INFO]   - Bob
-[12:35:35] [INFO]   - Charlie
+/rename Charlie Chuck
+[12:35:32] [OK] Renaming user 'Charlie' to 'Chuck'
+[12:35:32] [CHAT] Charlie is now known as Chuck (renamed by server)
 /kick Bob
 [12:35:45] [WARN] Kicking user: Bob
 [12:35:45] [SYSTEM] Bob has left the chat
+/ban Alice
+[12:35:50] [WARN] Banned IP 192.168.1.100 (user 'Alice')
+[12:35:50] [INFO] Disconnecting user 'Alice' from banned IP
+[12:35:50] [SYSTEM] Alice has left the chat
+/banlist
+[12:35:55] [INFO] Banned IPs (1):
+[12:35:55] [INFO]   - 192.168.1.100
+/unban 192.168.1.100
+[12:36:00] [OK] Unbanned IP 192.168.1.100
 /quit
-[12:35:50] [INFO] Server shutting down...
+[12:36:05] [INFO] Server shutting down...
 ```
 
 ## Project Structure
