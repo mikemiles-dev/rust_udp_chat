@@ -651,12 +651,42 @@ impl ChatClient {
                                 Ok(input::ClientUserInput::ListUsers) => {
                                     let message = ChatMessage::try_new(MessageTypes::ListUsers, None)
                                         .map_err(|e| io::Error::other(format!("Failed to create ListUsers message: {e:?}")))?;
-                                    self.send_message_chunked(message).await
-                                        .map_err(|e| io::Error::other(format!("Failed to send ListUsers message: {e:?}")))?;
+                                    if let Err(e) = self.send_message_chunked(message).await {
+                                        logger::log_warning("Connection lost while sending message");
+
+                                        if !self.was_kicked {
+                                            match self.reconnect().await {
+                                                Ok(()) => {
+                                                    // Connection restored
+                                                }
+                                                Err(reconnect_err) => {
+                                                    logger::log_error(&format!("Failed to reconnect: {:?}", reconnect_err));
+                                                    return Err(io::Error::other(format!("Failed to send ListUsers message: {e:?}")));
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
                                 Ok(user_input) => {
                                     if let Err(e) = self.handle_user_input(user_input).await {
-                                        logger::log_error(&format!("Error: {e:?}"));
+                                        // Check if this is a connection error that needs reconnection
+                                        if matches!(e, ChatClientError::IoError) {
+                                            logger::log_warning("Connection lost while sending message");
+
+                                            if !self.was_kicked {
+                                                match self.reconnect().await {
+                                                    Ok(()) => {
+                                                        // Connection restored
+                                                    }
+                                                    Err(reconnect_err) => {
+                                                        logger::log_error(&format!("Failed to reconnect: {:?}", reconnect_err));
+                                                        return Err(io::Error::other("Reconnection failed"));
+                                                    }
+                                                }
+                                            }
+                                        } else {
+                                            logger::log_error(&format!("Error: {e:?}"));
+                                        }
                                     }
                                 }
                                 Err(e) => {

@@ -1,3 +1,6 @@
+# 0.1.6
+ * Better client reconnection.
+
 # 0.1.5
  * More robust dead connection logic.
  * Fixed issues with input cursor and ctrl + c
