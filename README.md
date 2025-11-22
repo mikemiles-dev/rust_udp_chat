@@ -39,6 +39,104 @@ The project is organized into three crates:
 
 ## Quick Start
 
+### Pre-built Binaries (Recommended)
+
+Download the latest release for your platform from [GitHub Releases](https://github.com/mikemiles-dev/rust_chat/releases).
+
+#### Linux (x86_64)
+
+```bash
+# Download
+curl -LO https://github.com/mikemiles-dev/rust_chat/releases/latest/download/rust_chat_client-linux-x86_64
+curl -LO https://github.com/mikemiles-dev/rust_chat/releases/latest/download/rust_chat_server-linux-x86_64
+
+# Make executable
+chmod +x rust_chat_client-linux-x86_64 rust_chat_server-linux-x86_64
+
+# Run client
+./rust_chat_client-linux-x86_64
+
+# Run server
+./rust_chat_server-linux-x86_64
+```
+
+#### Linux (ARM64)
+
+```bash
+# Download
+curl -LO https://github.com/mikemiles-dev/rust_chat/releases/latest/download/rust_chat_client-linux-arm64
+curl -LO https://github.com/mikemiles-dev/rust_chat/releases/latest/download/rust_chat_server-linux-arm64
+
+# Make executable
+chmod +x rust_chat_client-linux-arm64 rust_chat_server-linux-arm64
+
+# Run client
+./rust_chat_client-linux-arm64
+
+# Run server
+./rust_chat_server-linux-arm64
+```
+
+#### macOS (Apple Silicon / M1/M2/M3)
+
+```bash
+# Download
+curl -LO https://github.com/mikemiles-dev/rust_chat/releases/latest/download/rust_chat_client-macos-arm64
+curl -LO https://github.com/mikemiles-dev/rust_chat/releases/latest/download/rust_chat_server-macos-arm64
+
+# Make executable
+chmod +x rust_chat_client-macos-arm64 rust_chat_server-macos-arm64
+
+# Run client (may need to allow in System Preferences > Security on first run)
+./rust_chat_client-macos-arm64
+
+# Run server
+./rust_chat_server-macos-arm64
+```
+
+#### macOS (Intel)
+
+```bash
+# Download
+curl -LO https://github.com/mikemiles-dev/rust_chat/releases/latest/download/rust_chat_client-macos-x86_64
+curl -LO https://github.com/mikemiles-dev/rust_chat/releases/latest/download/rust_chat_server-macos-x86_64
+
+# Make executable
+chmod +x rust_chat_client-macos-x86_64 rust_chat_server-macos-x86_64
+
+# Run client (may need to allow in System Preferences > Security on first run)
+./rust_chat_client-macos-x86_64
+
+# Run server
+./rust_chat_server-macos-x86_64
+```
+
+#### Windows (x86_64)
+
+```powershell
+# Download (PowerShell)
+Invoke-WebRequest -Uri "https://github.com/mikemiles-dev/rust_chat/releases/latest/download/rust_chat_client-windows-x86_64.exe" -OutFile "rust_chat_client.exe"
+Invoke-WebRequest -Uri "https://github.com/mikemiles-dev/rust_chat/releases/latest/download/rust_chat_server-windows-x86_64.exe" -OutFile "rust_chat_server.exe"
+
+# Run client
+.\rust_chat_client.exe
+
+# Run server
+.\rust_chat_server.exe
+```
+
+#### Environment Variables
+
+All binaries support these environment variables:
+
+```bash
+# Client
+CHAT_SERVER="tls://milesrust.chat:8443" CHAT_USERNAME="YourName" ./rust_chat_client-<platform>
+
+# Server
+CHAT_SERVER_ADDR="0.0.0.0:8080" CHAT_SERVER_MAX_CLIENTS="100" ./rust_chat_server-<platform>
+```
+
 ### Using Docker (Easiest)
 
 Connect to the live server instantly with Docker:
