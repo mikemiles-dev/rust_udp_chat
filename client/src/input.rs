@@ -8,6 +8,7 @@ pub enum ClientUserInput {
     DirectMessage { recipient: String, message: String },
     Reply(String),
     Rename(String),
+    SendFile { recipient: String, file_path: String },
     Quit,
 }
 
@@ -51,6 +52,15 @@ impl TryFrom<&str> for ClientUserInput {
                 } else {
                     let new_name = parts[1].to_string();
                     Ok(ClientUserInput::Rename(new_name))
+                }
+            }
+            "/send" => {
+                if parts.len() < 3 {
+                    Err(UserInputError::InvalidCommand)
+                } else {
+                    let recipient = parts[1].to_string();
+                    let file_path = parts[2..].join(" ");
+                    Ok(ClientUserInput::SendFile { recipient, file_path })
                 }
             }
             _ => {

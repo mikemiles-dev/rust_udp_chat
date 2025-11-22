@@ -2,10 +2,11 @@ use crate::input::{self, ClientUserInput};
 use crate::readline_helper;
 use shared::logger;
 use shared::message::{ChatMessage, ChatMessageError, MessageTypes};
-use shared::network::TcpMessageHandler;
+use shared::network::{TcpMessageHandler, MAX_FILE_SIZE};
 use std::collections::HashSet;
 use std::io;
 use std::net::AddrParseError;
+use std::path::Path;
 use std::pin::Pin;
 use std::sync::{Arc, RwLock};
 use std::task::{Context, Poll};
@@ -323,8 +324,112 @@ impl ChatClient {
                     }
                 }
             }
+            MessageTypes::FileTransfer => {
+                self.handle_file_transfer(&message);
+            }
+            MessageTypes::FileTransferAck => {
+                if let Some(content) = self.get_message_content(&message, "file ack") {
+                    logger::log_success(&content);
+                }
+            }
             _ => {
                 logger::log_warning(&format!("Unknown message type: {:?}", message.msg_type));
+            }
+        }
+    }
+
+    fn handle_file_transfer(&self, message: &ChatMessage) {
+        let content = match message.get_content() {
+            Some(c) => c,
+            None => {
+                logger::log_error("Received empty file transfer");
+                return;
+            }
+        };
+
+        // Parse binary format: recipient_len(1)|recipient|sender_len(1)|sender|filename_len(1)|filename|filedata
+        if content.len() < 2 {
+            logger::log_error("Invalid file transfer format");
+            return;
+        }
+
+        // First extract recipient to check if this file is for us
+        let recipient_len = content[0] as usize;
+        if content.len() < 1 + recipient_len + 1 {
+            logger::log_error("Invalid file transfer format");
+            return;
+        }
+
+        let recipient = match std::str::from_utf8(&content[1..1 + recipient_len]) {
+            Ok(s) => s,
+            Err(_) => {
+                logger::log_error("Invalid recipient name in file transfer");
+                return;
+            }
+        };
+
+        // Check if this file is for us
+        if recipient != self.chat_name {
+            return; // Not for us, ignore
+        }
+
+        // Now extract sender
+        let sender_start = 1 + recipient_len;
+        let sender_len = content[sender_start] as usize;
+        if content.len() < sender_start + 1 + sender_len + 1 {
+            logger::log_error("Invalid file transfer format");
+            return;
+        }
+
+        let sender = match std::str::from_utf8(&content[sender_start + 1..sender_start + 1 + sender_len]) {
+            Ok(s) => s,
+            Err(_) => {
+                logger::log_error("Invalid sender name in file transfer");
+                return;
+            }
+        };
+
+        // Extract filename
+        let filename_len_pos = sender_start + 1 + sender_len;
+        let filename_len = content[filename_len_pos] as usize;
+        let filename_start = filename_len_pos + 1;
+        if content.len() < filename_start + filename_len {
+            logger::log_error("Invalid file transfer format");
+            return;
+        }
+
+        let filename = match std::str::from_utf8(&content[filename_start..filename_start + filename_len]) {
+            Ok(s) => s,
+            Err(_) => {
+                logger::log_error("Invalid filename in file transfer");
+                return;
+            }
+        };
+
+        let file_data = &content[filename_start + filename_len..];
+
+        logger::log_warning(&format!(
+            "[FILE from {}]: '{}' ({} bytes)",
+            sender,
+            filename,
+            file_data.len()
+        ));
+
+        // Save file to downloads directory or current directory
+        let save_path = format!("downloads/{}", filename);
+
+        // Create downloads directory if it doesn't exist
+        if let Err(e) = std::fs::create_dir_all("downloads") {
+            logger::log_error(&format!("Failed to create downloads directory: {}", e));
+            return;
+        }
+
+        match std::fs::write(&save_path, file_data) {
+            Ok(_) => {
+                logger::log_success(&format!("File saved to: {}", save_path));
+            }
+            Err(e) => {
+                logger::log_error(&format!("Failed to save file: {}", e));
             }
         }
     }
@@ -391,6 +496,7 @@ impl ChatClient {
                 logger::log_info("  /list - List all users");
                 logger::log_info("  /dm <username> <message> - Send direct message");
                 logger::log_info("  /r <message> - Reply to last direct message");
+                logger::log_info("  /send <username> <filepath> - Send a file (max 10MB)");
                 logger::log_info("  /rename <new_name> - Change your username");
                 logger::log_info("  /quit - Exit the chat");
                 Ok(())
@@ -408,8 +514,68 @@ impl ChatClient {
                 self.send_message_chunked(message).await?;
                 Ok(())
             }
+            input::ClientUserInput::SendFile { recipient, file_path } => {
+                self.send_file(&recipient, &file_path).await
+            }
             input::ClientUserInput::Quit => Ok(()),
         }
+    }
+
+    async fn send_file(&mut self, recipient: &str, file_path: &str) -> Result<(), ChatClientError> {
+        let path = Path::new(file_path);
+
+        // Check if file exists
+        if !path.exists() {
+            logger::log_error(&format!("File not found: {}", file_path));
+            return Ok(());
+        }
+
+        // Get file name
+        let file_name = path.file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("unknown");
+
+        // Read file
+        let file_data = match std::fs::read(path) {
+            Ok(data) => data,
+            Err(e) => {
+                logger::log_error(&format!("Failed to read file: {}", e));
+                return Ok(());
+            }
+        };
+
+        // Check file size (10MB limit, minus some overhead for metadata)
+        let max_content_size = MAX_FILE_SIZE - 1024; // Leave room for headers
+        if file_data.len() > max_content_size {
+            logger::log_error(&format!(
+                "File too large: {} bytes (max {} bytes / ~10MB)",
+                file_data.len(),
+                max_content_size
+            ));
+            return Ok(());
+        }
+
+        logger::log_info(&format!(
+            "Sending file '{}' ({} bytes) to {}...",
+            file_name,
+            file_data.len(),
+            recipient
+        ));
+
+        // Build file transfer message: recipient|filename|filedata
+        // We use a binary format: recipient_len(1)|recipient|filename_len(1)|filename|filedata
+        let mut content = Vec::new();
+        content.push(recipient.len() as u8);
+        content.extend_from_slice(recipient.as_bytes());
+        content.push(file_name.len() as u8);
+        content.extend_from_slice(file_name.as_bytes());
+        content.extend_from_slice(&file_data);
+
+        let message = ChatMessage::try_new(MessageTypes::FileTransfer, Some(content))?;
+        self.send_message_chunked(message).await?;
+
+        logger::log_success(&format!("File '{}' sent to {}", file_name, recipient));
+        Ok(())
     }
 
     pub async fn run(&mut self) -> io::Result<()> {

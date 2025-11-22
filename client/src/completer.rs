@@ -21,6 +21,8 @@ impl ClientCompleter {
                 "/list".to_string(),
                 "/dm".to_string(),
                 "/r".to_string(),
+                "/send".to_string(),
+                "/rename".to_string(),
             ],
             users,
         }
@@ -29,17 +31,18 @@ impl ClientCompleter {
     fn get_candidates(&self, line: &str) -> Vec<String> {
         let trimmed = line.trim_start();
 
-        // If line starts with /dm and has a space, complete usernames
-        if trimmed.starts_with("/dm ") {
+        // If line starts with /dm or /send and has a space, complete usernames
+        if trimmed.starts_with("/dm ") || trimmed.starts_with("/send ") {
             let parts: Vec<&str> = trimmed.splitn(3, ' ').collect();
             if parts.len() == 2 {
-                // Complete username after /dm
+                // Complete username after /dm or /send
+                let cmd = parts[0];
                 let prefix = parts[1];
                 let users = self.users.read().unwrap();
                 return users
                     .iter()
                     .filter(|u| u.starts_with(prefix))
-                    .map(|u| format!("/dm {}", u))
+                    .map(|u| format!("{} {}", cmd, u))
                     .collect();
             }
         }

@@ -2,7 +2,8 @@ use crate::message::ChatMessage;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 pub const CHUNK_SIZE: usize = 8192;
-pub const MAX_MESSAGE_SIZE: usize = 8192; // 8KB max message size
+pub const MAX_MESSAGE_SIZE: usize = 8192; // 8KB max message size for regular messages
+pub const MAX_FILE_SIZE: usize = 10 * 1024 * 1024; // 10MB max file size
 
 pub enum TcpMessageHandlerError {
     IoError(std::io::Error),
@@ -18,11 +19,11 @@ pub trait TcpMessageHandler {
         let message_bytes: Vec<u8> = message.into();
 
         // Validate message size to prevent integer overflow
-        let msg_len = u16::try_from(message_bytes.len()).map_err(|_| {
+        let msg_len = u32::try_from(message_bytes.len()).map_err(|_| {
             std::io::Error::new(std::io::ErrorKind::InvalidData, "Message too large")
         })?;
 
-        // Send the message length first
+        // Send the message length first (4 bytes)
         self.get_stream().write_all(&msg_len.to_be_bytes()).await?;
 
         // Send the message in chunks
@@ -52,8 +53,8 @@ pub trait TcpMessageHandler {
     }
 
     async fn read_message_chunked(&mut self) -> Result<ChatMessage, TcpMessageHandlerError> {
-        // Read the first 2 bytes to get the message length
-        let mut len_bytes = [0u8; 2];
+        // Read the first 4 bytes to get the message length
+        let mut len_bytes = [0u8; 4];
         self.get_stream()
             .read_exact(&mut len_bytes)
             .await
@@ -65,10 +66,11 @@ pub trait TcpMessageHandler {
                 }
             })?;
 
-        let msg_len = u16::from_be_bytes(len_bytes) as usize;
+        let msg_len = u32::from_be_bytes(len_bytes) as usize;
 
-        // Validate message size to prevent memory exhaustion attacks
-        if msg_len > MAX_MESSAGE_SIZE {
+        // Peek at message type to determine max size (need to read it first)
+        // For now, use MAX_FILE_SIZE as the upper bound
+        if msg_len > MAX_FILE_SIZE {
             return Err(TcpMessageHandlerError::IoError(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 "Message exceeds maximum size",

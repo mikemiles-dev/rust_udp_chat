@@ -10,6 +10,7 @@ A modern, colorful terminal-based chat application written in Rust with async/aw
 - 👥 **Multi-user Support** - Multiple clients can connect simultaneously
 - 🔄 **Real-time Messaging** - Instant message broadcasting to all connected users
 - 💬 **Direct Messaging** - Send private messages to specific users with `/dm` and `/r` commands
+- 📁 **File Transfer** - Send files up to 10MB to other users with `/send` command
 - 🏷️ **Username Colorization** - Each user gets a unique, consistent color
 - ⚡ **Async I/O** - Built on Tokio for high-performance async networking
 - 🔧 **Modular Architecture** - Clean separation between client, server, and shared code
@@ -246,6 +247,7 @@ Once connected to the server, clients can use the following commands:
 - `/list` - List all connected users
 - `/dm <USERNAME> <MESSAGE>` - Send a direct message to a specific user
 - `/r <MESSAGE>` - Reply to the last user who sent you a DM
+- `/send <USERNAME> <FILEPATH>` - Send a file to a specific user (max 10MB)
 - `/rename <NEW_NAME>` - Change your username
 - Any other text - Send a message to all connected users
 
@@ -477,6 +479,25 @@ Send private messages to specific users:
 - **Privacy**: The server logs that DMs are happening but doesn't display the message content
 - **Validation**: Server validates that the recipient exists before sending
 
+### File Transfer
+
+Send files directly to other users:
+- **Send a file**: `/send <username> <filepath>` - Send any file up to 10MB
+- **Auto-save**: Received files are automatically saved to `downloads/` directory
+- **Privacy**: Files are sent directly to the recipient (server relays but doesn't store)
+- **Validation**: Server validates recipient exists before transferring
+- **Supported**: All file types (images, documents, archives, etc.)
+
+Example:
+```bash
+# Send a file
+/send Alice /path/to/document.pdf
+
+# Recipient sees:
+[FILE from Bob]: 'document.pdf' (1234567 bytes)
+File saved to: downloads/document.pdf
+```
+
 ### Security Features
 
 The application implements comprehensive security measures to protect against common network attacks:
@@ -530,6 +551,7 @@ The application implements comprehensive security measures to protect against co
 | Security Feature | Implementation |
 |-----------------|----------------|
 | Max Message Size | 8KB |
+| Max File Size | 10MB |
 | Max Username Length | 32 characters |
 | Max Message Content | 1KB |
 | Rate Limit | 10 messages/second |

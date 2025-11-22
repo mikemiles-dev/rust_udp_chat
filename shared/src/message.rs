@@ -8,6 +8,8 @@ pub enum MessageTypes {
     DirectMessage,
     Error,
     RenameRequest,
+    FileTransfer,      // File data being sent: recipient|sender|filename|data
+    FileTransferAck,   // Acknowledgment that file was received
     Unknown(u8),
 }
 
@@ -22,6 +24,8 @@ impl From<u8> for MessageTypes {
             6 => MessageTypes::DirectMessage,
             7 => MessageTypes::Error,
             8 => MessageTypes::RenameRequest,
+            9 => MessageTypes::FileTransfer,
+            10 => MessageTypes::FileTransferAck,
             other => MessageTypes::Unknown(other),
         }
     }
@@ -29,7 +33,7 @@ impl From<u8> for MessageTypes {
 
 #[derive(Debug, Clone)]
 pub struct ChatMessage {
-    msg_len: u16,
+    msg_len: u32,
     pub msg_type: MessageTypes,
     content: Option<Vec<u8>>,
 }
@@ -60,39 +64,39 @@ impl ChatMessage {
         let msg_len = match &content {
             Some(data) => data
                 .len()
-                .checked_add(3)
+                .checked_add(5) // 4 bytes for length + 1 byte for type
                 .ok_or(ChatMessageError::InvalidLength)?,
-            None => 3, // only msg_type byte + len
+            None => 5, // only msg_type byte + len (4 bytes)
         };
         Ok(ChatMessage {
-            msg_len: u16::try_from(msg_len).map_err(|_| ChatMessageError::InvalidLength)?,
+            msg_len: u32::try_from(msg_len).map_err(|_| ChatMessageError::InvalidLength)?,
             msg_type,
             content,
         })
     }
 }
 
-// Protocol: [msg_len (2 bytes)][msg_type (1 byte)] [content (msg_len - 2 bytes)]
+// Protocol: [msg_len (4 bytes)][msg_type (1 byte)][content (msg_len - 5 bytes)]
 impl From<Vec<u8>> for ChatMessage {
     fn from(buffer: Vec<u8>) -> Self {
         if buffer.is_empty() {
             return ChatMessage {
-                msg_len: 3,
+                msg_len: 5,
                 msg_type: MessageTypes::Unknown(0),
                 content: None,
             };
         }
-        if buffer.len() < 3 {
+        if buffer.len() < 5 {
             return ChatMessage {
-                msg_len: 3,
+                msg_len: 5,
                 msg_type: MessageTypes::Unknown(0),
                 content: None,
             };
         }
-        let msg_len = u16::from_be_bytes([buffer[0], buffer[1]]);
-        let msg_type = MessageTypes::from(buffer[2]);
-        let content = if buffer.len() > 1 {
-            Some(buffer[3..].to_vec())
+        let msg_len = u32::from_be_bytes([buffer[0], buffer[1], buffer[2], buffer[3]]);
+        let msg_type = MessageTypes::from(buffer[4]);
+        let content = if buffer.len() > 5 {
+            Some(buffer[5..].to_vec())
         } else {
             None
         };
@@ -118,6 +122,8 @@ impl From<ChatMessage> for Vec<u8> {
             MessageTypes::DirectMessage => 6,
             MessageTypes::Error => 7,
             MessageTypes::RenameRequest => 8,
+            MessageTypes::FileTransfer => 9,
+            MessageTypes::FileTransferAck => 10,
             MessageTypes::Unknown(val) => val,
         });
         if let Some(content) = message.content {
@@ -146,16 +152,8 @@ mod tests {
         let msg = ChatMessage::try_new(MessageTypes::ListUsers, None);
         assert!(msg.is_ok());
         let msg = msg.unwrap();
-        assert_eq!(msg.msg_len, 3);
+        assert_eq!(msg.msg_len, 5); // 4 bytes length + 1 byte type
         assert_eq!(msg.content, None);
-    }
-
-    #[test]
-    fn test_message_exceeds_max_size() {
-        // Create a message that's too large (> 65KB)
-        let large_content = vec![0u8; 70000];
-        let msg = ChatMessage::try_new(MessageTypes::ChatMessage, Some(large_content));
-        assert!(msg.is_err());
     }
 
     #[test]
@@ -164,16 +162,16 @@ mod tests {
         let msg = ChatMessage::try_new(MessageTypes::ChatMessage, Some(content.clone())).unwrap();
         let serialized: Vec<u8> = msg.clone().into();
 
-        // Check structure: [2 bytes len][1 byte type][content]
-        assert_eq!(serialized.len(), 2 + 1 + content.len());
-        assert_eq!(serialized[2], 1); // ChatMessage type
-        assert_eq!(&serialized[3..], content.as_slice());
+        // Check structure: [4 bytes len][1 byte type][content]
+        assert_eq!(serialized.len(), 4 + 1 + content.len());
+        assert_eq!(serialized[4], 1); // ChatMessage type
+        assert_eq!(&serialized[5..], content.as_slice());
     }
 
     #[test]
     fn test_message_deserialization() {
         let mut buffer = vec![];
-        buffer.extend_from_slice(&7u16.to_be_bytes()); // length
+        buffer.extend_from_slice(&9u32.to_be_bytes()); // length (4 + 1 + 4 = 9)
         buffer.push(1); // ChatMessage type
         buffer.extend_from_slice(b"Test");
 
@@ -212,7 +210,7 @@ mod tests {
     #[test]
     fn test_empty_buffer_deserialization() {
         let msg = ChatMessage::from(vec![]);
-        assert_eq!(msg.msg_len, 3);
+        assert_eq!(msg.msg_len, 5);
         assert!(matches!(msg.msg_type, MessageTypes::Unknown(0)));
         assert_eq!(msg.content, None);
     }
@@ -220,7 +218,7 @@ mod tests {
     #[test]
     fn test_short_buffer_deserialization() {
         let msg = ChatMessage::from(vec![0, 1]); // Too short
-        assert_eq!(msg.msg_len, 3);
+        assert_eq!(msg.msg_len, 5);
         assert!(matches!(msg.msg_type, MessageTypes::Unknown(0)));
     }
 

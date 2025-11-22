@@ -86,6 +86,10 @@ impl<'a> MessageHandlers<'a> {
                 self.process_rename_request(message.content_as_string(), &mut tcp_handler, chat_name)
                     .await?;
             }
+            MessageTypes::FileTransfer => {
+                self.process_file_transfer(message.get_content(), &mut tcp_handler, chat_name)
+                    .await?;
+            }
             _ => (),
         }
         Ok(())
@@ -401,6 +405,106 @@ impl<'a> MessageHandlers<'a> {
                 .map_err(|_| UserConnectionError::InvalidMessage)?;
         self.tx
             .send((broadcast_message, self.addr))
+            .map_err(UserConnectionError::BroadcastError)?;
+
+        Ok(())
+    }
+
+    async fn process_file_transfer<S: AsyncRead + AsyncWrite + Unpin>(
+        &self,
+        content: Option<&[u8]>,
+        tcp_handler: &mut StreamWrapper<'_, S>,
+        chat_name: &Option<String>,
+    ) -> Result<(), UserConnectionError> {
+        let content = content.ok_or(UserConnectionError::InvalidMessage)?;
+
+        // Check if user has joined
+        let sender = match chat_name {
+            Some(name) => name.clone(),
+            None => {
+                logger::log_warning(&format!(
+                    "User at {} tried to send file before joining",
+                    self.addr
+                ));
+                return Err(UserConnectionError::InvalidMessage);
+            }
+        };
+
+        // Parse binary format: recipient_len(1)|recipient|filename_len(1)|filename|filedata
+        if content.len() < 2 {
+            logger::log_warning(&format!("Invalid file transfer format from {}", self.addr));
+            return Err(UserConnectionError::InvalidMessage);
+        }
+
+        let recipient_len = content[0] as usize;
+        if content.len() < 1 + recipient_len + 1 {
+            logger::log_warning(&format!("Invalid file transfer format from {}", self.addr));
+            return Err(UserConnectionError::InvalidMessage);
+        }
+
+        let recipient = std::str::from_utf8(&content[1..1 + recipient_len])
+            .map_err(|_| UserConnectionError::InvalidMessage)?;
+
+        let filename_len = content[1 + recipient_len] as usize;
+        let filename_start = 1 + recipient_len + 1;
+        if content.len() < filename_start + filename_len {
+            logger::log_warning(&format!("Invalid file transfer format from {}", self.addr));
+            return Err(UserConnectionError::InvalidMessage);
+        }
+
+        let filename = std::str::from_utf8(&content[filename_start..filename_start + filename_len])
+            .map_err(|_| UserConnectionError::InvalidMessage)?;
+
+        let file_data = &content[filename_start + filename_len..];
+
+        // Check if recipient exists
+        let clients = self.connected_clients.read().await;
+        if !clients.contains(recipient) {
+            drop(clients);
+            let error_msg = format!("User '{}' not found", recipient);
+            logger::log_warning(&format!(
+                "[FILE] {} -> {} (user not found)",
+                sender, recipient
+            ));
+            let error_message =
+                ChatMessage::try_new(MessageTypes::Error, Some(error_msg.into_bytes()))
+                    .map_err(|_| UserConnectionError::InvalidMessage)?;
+            tcp_handler
+                .send_message_chunked(error_message)
+                .await
+                .map_err(UserConnectionError::IoError)?;
+            return Ok(());
+        }
+        drop(clients);
+
+        logger::log_system(&format!(
+            "[FILE] {} -> {} ('{}', {} bytes)",
+            sender, recipient, filename, file_data.len()
+        ));
+
+        // Build outgoing message with sender instead of recipient
+        // Format: sender_len(1)|sender|filename_len(1)|filename|filedata
+        let mut outgoing_content = Vec::new();
+        outgoing_content.push(sender.len() as u8);
+        outgoing_content.extend_from_slice(sender.as_bytes());
+        outgoing_content.push(filename.len() as u8);
+        outgoing_content.extend_from_slice(filename.as_bytes());
+        outgoing_content.extend_from_slice(file_data);
+
+        // We need to include recipient info for client filtering
+        // Prepend recipient_len(1)|recipient to the outgoing content
+        let mut final_content = Vec::new();
+        final_content.push(recipient.len() as u8);
+        final_content.extend_from_slice(recipient.as_bytes());
+        final_content.extend_from_slice(&outgoing_content);
+
+        let file_message =
+            ChatMessage::try_new(MessageTypes::FileTransfer, Some(final_content))
+                .map_err(|_| UserConnectionError::InvalidMessage)?;
+
+        // Broadcast to all clients (recipient will filter)
+        self.tx
+            .send((file_message, self.addr))
             .map_err(UserConnectionError::BroadcastError)?;
 
         Ok(())
