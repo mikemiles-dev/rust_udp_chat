@@ -10,6 +10,7 @@ pub enum MessageTypes {
     RenameRequest,
     FileTransfer,      // File data being sent: recipient|sender|filename|data
     FileTransferAck,   // Acknowledgment that file was received
+    SetStatus,         // Set user's status message
     Unknown(u8),
 }
 
@@ -26,6 +27,7 @@ impl From<u8> for MessageTypes {
             8 => MessageTypes::RenameRequest,
             9 => MessageTypes::FileTransfer,
             10 => MessageTypes::FileTransferAck,
+            11 => MessageTypes::SetStatus,
             other => MessageTypes::Unknown(other),
         }
     }
@@ -124,6 +126,7 @@ impl From<ChatMessage> for Vec<u8> {
             MessageTypes::RenameRequest => 8,
             MessageTypes::FileTransfer => 9,
             MessageTypes::FileTransferAck => 10,
+            MessageTypes::SetStatus => 11,
             MessageTypes::Unknown(val) => val,
         });
         if let Some(content) = message.content {

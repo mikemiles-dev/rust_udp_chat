@@ -35,6 +35,8 @@ pub struct ChatServer {
     connected_clients: Arc<RwLock<HashSet<String>>>,
     /// Maps username to their IP address
     user_ips: Arc<RwLock<HashMap<String, IpAddr>>>,
+    /// Maps username to their status message
+    user_statuses: Arc<RwLock<HashMap<String, String>>>,
     /// Set of banned IP addresses
     banned_ips: Arc<RwLock<HashSet<IpAddr>>>,
     max_clients: usize,
@@ -54,6 +56,7 @@ impl ChatServer {
             server_commands: cmd_tx,
             connected_clients: Arc::new(RwLock::new(HashSet::new())),
             user_ips: Arc::new(RwLock::new(HashMap::new())),
+            user_statuses: Arc::new(RwLock::new(HashMap::new())),
             banned_ips: Arc::new(RwLock::new(HashSet::new())),
             max_clients,
             active_connections: Arc::new(AtomicUsize::new(0)),
@@ -107,6 +110,7 @@ impl ChatServer {
                             let tls_acceptor = self.tls_acceptor.clone();
                             let connected_clients = self.connected_clients.clone();
                             let user_ips = self.user_ips.clone();
+                            let user_statuses = self.user_statuses.clone();
 
                             tokio::spawn(async move {
                                 // Wrap socket in TLS if configured
@@ -118,7 +122,7 @@ impl ChatServer {
                                     ).await {
                                         Ok(Ok(tls_stream)) => {
                                             let mut client_connection =
-                                                UserConnection::new_tls(tls_stream, addr, tx_clone, cmd_tx_clone, connected_clients, user_ips);
+                                                UserConnection::new_tls(tls_stream, addr, tx_clone, cmd_tx_clone, connected_clients, user_ips, user_statuses);
                                             client_connection.handle().await
                                         }
                                         Ok(Err(e)) => {
@@ -132,7 +136,7 @@ impl ChatServer {
                                     }
                                 } else {
                                     let mut client_connection =
-                                        UserConnection::new(socket, addr, tx_clone, cmd_tx_clone, connected_clients, user_ips);
+                                        UserConnection::new(socket, addr, tx_clone, cmd_tx_clone, connected_clients, user_ips, user_statuses);
                                     client_connection.handle().await
                                 };
 

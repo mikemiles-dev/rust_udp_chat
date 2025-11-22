@@ -332,6 +332,11 @@ impl ChatClient {
                     logger::log_success(&content);
                 }
             }
+            MessageTypes::SetStatus => {
+                if let Some(content) = self.get_message_content(&message, "status") {
+                    logger::log_success(&content);
+                }
+            }
             _ => {
                 logger::log_warning(&format!("Unknown message type: {:?}", message.msg_type));
             }
@@ -493,11 +498,13 @@ impl ChatClient {
             input::ClientUserInput::Help => {
                 logger::log_info("Available commands:");
                 logger::log_info("  /help - Show this help message");
-                logger::log_info("  /list - List all users");
+                logger::log_info("  /list - List all users (with statuses)");
                 logger::log_info("  /dm <username> <message> - Send direct message");
                 logger::log_info("  /r <message> - Reply to last direct message");
                 logger::log_info("  /send <username> <filepath> - Send a file (max 10MB)");
                 logger::log_info("  /rename <new_name> - Change your username");
+                logger::log_info("  /status <message> - Set your status (visible in /list)");
+                logger::log_info("  /status - Clear your status");
                 logger::log_info("  /quit - Exit the chat");
                 Ok(())
             }
@@ -516,6 +523,12 @@ impl ChatClient {
             }
             input::ClientUserInput::SendFile { recipient, file_path } => {
                 self.send_file(&recipient, &file_path).await
+            }
+            input::ClientUserInput::Status(status) => {
+                let content = status.map(|s| s.into_bytes());
+                let message = ChatMessage::try_new(MessageTypes::SetStatus, content)?;
+                self.send_message_chunked(message).await?;
+                Ok(())
             }
             input::ClientUserInput::Quit => Ok(()),
         }

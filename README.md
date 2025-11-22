@@ -24,6 +24,7 @@ A modern, colorful terminal-based chat application written in Rust with async/aw
 - 💡 **Inline Hints** - Visual hints showing available completions as you type
 - 🚀 **Production Ready** - Docker and native systemd deployment options
 - 👮 **Admin Commands** - Server-side `/kick`, `/ban`, `/rename` and user management
+- 📝 **User Status** - Set a custom status message visible to other users
 
 ## Architecture
 
@@ -259,11 +260,13 @@ Once connected to the server, clients can use the following commands:
 
 - `/help` - Display available commands
 - `/quit` - Exit the chat application
-- `/list` - List all connected users
+- `/list` - List all connected users (with their status if set)
 - `/dm <USERNAME> <MESSAGE>` - Send a direct message to a specific user
 - `/r <MESSAGE>` - Reply to the last user who sent you a DM
 - `/send <USERNAME> <FILEPATH>` - Send a file to a specific user (max 10MB)
 - `/rename <NEW_NAME>` - Change your username
+- `/status <MESSAGE>` - Set your status (visible in `/list`)
+- `/status` - Clear your status
 - Any other text - Send a message to all connected users
 
 ### Server Commands
@@ -341,7 +344,7 @@ Alice /r Perfect! Let's discuss the project.
 [12:35:02] [SYSTEM] Bob has joined the chat
 /list
 [12:35:15] [INFO] Connected users (2):
-[12:35:15] [INFO]   - Alice
+[12:35:15] [INFO]   - Alice - AFK for lunch
 [12:35:15] [INFO]   - Bob
 [12:35:30] [SYSTEM] Charlie has joined the chat
 /rename Charlie Chuck
@@ -486,6 +489,30 @@ Reconnected to server!
 Alice has joined the chat
 ```
 
+### User Status
+
+Set a custom status message that other users can see:
+- **Set status**: `/status <message>` - Set your status (e.g., `/status AFK for lunch`)
+- **Clear status**: `/status` - Remove your status
+- **View statuses**: Use `/list` to see all users with their statuses
+- **Max length**: 128 characters
+- **Auto-cleanup**: Status is automatically removed when you disconnect
+
+Example:
+```bash
+# Set your status
+/status In a meeting
+
+# Other users see when they /list:
+Current users online:
+ - Alice - In a meeting
+ - Bob
+ - Charlie - BRB
+
+# Clear your status
+/status
+```
+
 ### Direct Messaging
 
 Send private messages to specific users:
@@ -585,6 +612,8 @@ Messages are sent over TCP with a custom chunked protocol that supports:
 - Direct messages
 - Username renames
 - User list requests
+- User status updates
+- File transfers
 - Error messages
 
 ## Building from Source

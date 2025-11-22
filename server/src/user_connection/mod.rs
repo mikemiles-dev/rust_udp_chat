@@ -72,6 +72,7 @@ pub struct UserConnection {
     server_commands: broadcast::Sender<ServerCommand>,
     connected_clients: Arc<RwLock<HashSet<String>>>,
     user_ips: Arc<RwLock<HashMap<String, IpAddr>>>,
+    user_statuses: Arc<RwLock<HashMap<String, String>>>,
     chat_name: Option<String>,
     rate_limiter: RateLimiter,
 }
@@ -91,6 +92,7 @@ impl UserConnection {
         server_commands: broadcast::Sender<ServerCommand>,
         connected_clients: Arc<RwLock<HashSet<String>>>,
         user_ips: Arc<RwLock<HashMap<String, IpAddr>>>,
+        user_statuses: Arc<RwLock<HashMap<String, String>>>,
     ) -> Self {
         UserConnection {
             socket: ConnectionStream::Plain(socket),
@@ -99,6 +101,7 @@ impl UserConnection {
             server_commands,
             connected_clients,
             user_ips,
+            user_statuses,
             chat_name: None,
             rate_limiter: RateLimiter::new(RATE_LIMIT_MESSAGES, RATE_LIMIT_WINDOW),
         }
@@ -111,6 +114,7 @@ impl UserConnection {
         server_commands: broadcast::Sender<ServerCommand>,
         connected_clients: Arc<RwLock<HashSet<String>>>,
         user_ips: Arc<RwLock<HashMap<String, IpAddr>>>,
+        user_statuses: Arc<RwLock<HashMap<String, String>>>,
     ) -> Self {
         UserConnection {
             socket: ConnectionStream::Tls(Box::new(socket)),
@@ -119,6 +123,7 @@ impl UserConnection {
             server_commands,
             connected_clients,
             user_ips,
+            user_statuses,
             chat_name: None,
             rate_limiter: RateLimiter::new(RATE_LIMIT_MESSAGES, RATE_LIMIT_WINDOW),
         }
@@ -249,6 +254,11 @@ impl UserConnection {
             ips.remove(chat_name);
             drop(ips);
 
+            // Remove user's status
+            let mut statuses = self.user_statuses.write().await;
+            statuses.remove(chat_name);
+            drop(statuses);
+
             if let Ok(leave_message) =
                 ChatMessage::try_new(MessageTypes::Leave, Some(chat_name.clone().into_bytes()))
             {
@@ -266,6 +276,7 @@ impl UserConnection {
             tx: &self.tx,
             connected_clients: &self.connected_clients,
             user_ips: &self.user_ips,
+            user_statuses: &self.user_statuses,
         };
 
         handlers

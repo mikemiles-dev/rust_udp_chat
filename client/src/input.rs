@@ -9,6 +9,7 @@ pub enum ClientUserInput {
     Reply(String),
     Rename(String),
     SendFile { recipient: String, file_path: String },
+    Status(Option<String>),
     Quit,
 }
 
@@ -61,6 +62,15 @@ impl TryFrom<&str> for ClientUserInput {
                     let recipient = parts[1].to_string();
                     let file_path = parts[2..].join(" ");
                     Ok(ClientUserInput::SendFile { recipient, file_path })
+                }
+            }
+            "/status" => {
+                if parts.len() < 2 {
+                    // No status provided - clear status
+                    Ok(ClientUserInput::Status(None))
+                } else {
+                    let status = parts[1..].join(" ");
+                    Ok(ClientUserInput::Status(Some(status)))
                 }
             }
             _ => {
@@ -220,5 +230,23 @@ mod tests {
         } else {
             panic!("Expected DirectMessage variant");
         }
+    }
+
+    #[test]
+    fn test_status_command_with_message() {
+        let input = ClientUserInput::try_from("/status AFK for lunch");
+        assert!(input.is_ok());
+        if let ClientUserInput::Status(Some(status)) = input.unwrap() {
+            assert_eq!(status, "AFK for lunch");
+        } else {
+            panic!("Expected Status variant with message");
+        }
+    }
+
+    #[test]
+    fn test_status_command_clear() {
+        let input = ClientUserInput::try_from("/status");
+        assert!(input.is_ok());
+        assert!(matches!(input.unwrap(), ClientUserInput::Status(None)));
     }
 }

@@ -26,12 +26,14 @@ impl<'a, S: AsyncRead + AsyncWrite + Unpin> TcpMessageHandler for StreamWrapper<
 // Security limits
 pub const MAX_USERNAME_LENGTH: usize = 32;
 pub const MAX_MESSAGE_LENGTH: usize = 1024; // 1KB max message content
+pub const MAX_STATUS_LENGTH: usize = 128; // Max status message length
 
 pub struct MessageHandlers<'a> {
     pub addr: SocketAddr,
     pub tx: &'a broadcast::Sender<(ChatMessage, SocketAddr)>,
     pub connected_clients: &'a Arc<RwLock<HashSet<String>>>,
     pub user_ips: &'a Arc<RwLock<HashMap<String, IpAddr>>>,
+    pub user_statuses: &'a Arc<RwLock<HashMap<String, String>>>,
 }
 
 impl<'a> MessageHandlers<'a> {
@@ -90,6 +92,10 @@ impl<'a> MessageHandlers<'a> {
                 self.process_file_transfer(message.get_content(), &mut tcp_handler, chat_name)
                     .await?;
             }
+            MessageTypes::SetStatus => {
+                self.process_set_status(message.content_as_string(), &mut tcp_handler, chat_name)
+                    .await?;
+            }
             _ => (),
         }
         Ok(())
@@ -99,12 +105,29 @@ impl<'a> MessageHandlers<'a> {
         &self,
         tcp_handler: &mut StreamWrapper<'_, S>,
     ) -> Result<(), UserConnectionError> {
-        let clients = self.connected_clients.clone();
-        let clients = clients.read().await;
-        let user_list = clients.iter().cloned().collect::<Vec<String>>().join("\n");
-        let list_message =
-            ChatMessage::try_new(MessageTypes::ListUsers, Some(user_list.into_bytes()))
-                .map_err(|_| UserConnectionError::InvalidMessage)?;
+        let clients = self.connected_clients.read().await;
+        let statuses = self.user_statuses.read().await;
+
+        // Build user list with statuses
+        let user_list: Vec<String> = clients
+            .iter()
+            .map(|username| {
+                if let Some(status) = statuses.get(username) {
+                    format!("{} - {}", username, status)
+                } else {
+                    username.clone()
+                }
+            })
+            .collect();
+
+        drop(clients);
+        drop(statuses);
+
+        let list_message = ChatMessage::try_new(
+            MessageTypes::ListUsers,
+            Some(user_list.join("\n").into_bytes()),
+        )
+        .map_err(|_| UserConnectionError::InvalidMessage)?;
         tcp_handler
             .send_message_chunked(list_message)
             .await
@@ -506,6 +529,67 @@ impl<'a> MessageHandlers<'a> {
         self.tx
             .send((file_message, self.addr))
             .map_err(UserConnectionError::BroadcastError)?;
+
+        Ok(())
+    }
+
+    async fn process_set_status<S: AsyncRead + AsyncWrite + Unpin>(
+        &self,
+        status: Option<String>,
+        tcp_handler: &mut StreamWrapper<'_, S>,
+        chat_name: &Option<String>,
+    ) -> Result<(), UserConnectionError> {
+        // Check if user has joined first
+        let username = match chat_name {
+            Some(name) => name.clone(),
+            None => {
+                logger::log_warning(&format!(
+                    "User at {} tried to set status before joining",
+                    self.addr
+                ));
+                return Err(UserConnectionError::InvalidMessage);
+            }
+        };
+
+        let status_text = status.unwrap_or_default();
+
+        // Validate status length
+        if status_text.len() > MAX_STATUS_LENGTH {
+            let error_msg = ChatMessage::try_new(
+                MessageTypes::Error,
+                Some(format!("Status too long (max {} characters)", MAX_STATUS_LENGTH).into_bytes()),
+            )
+            .map_err(|_| UserConnectionError::InvalidMessage)?;
+            tcp_handler
+                .send_message_chunked(error_msg)
+                .await
+                .map_err(UserConnectionError::IoError)?;
+            return Ok(());
+        }
+
+        // Update or remove status
+        let mut statuses = self.user_statuses.write().await;
+        if status_text.is_empty() {
+            statuses.remove(&username);
+            logger::log_system(&format!("{} cleared their status", username));
+        } else {
+            statuses.insert(username.clone(), status_text.clone());
+            logger::log_system(&format!("{} set status: {}", username, status_text));
+        }
+        drop(statuses);
+
+        // Send confirmation back to client
+        let confirm_msg = if status_text.is_empty() {
+            "Status cleared".to_string()
+        } else {
+            format!("Status set to: {}", status_text)
+        };
+        let response = ChatMessage::try_new(MessageTypes::SetStatus, Some(confirm_msg.into_bytes()))
+            .map_err(|_| UserConnectionError::InvalidMessage)?;
+        tcp_handler
+            .send_message_chunked(response)
+            .await
+            .map_err(UserConnectionError::IoError)?;
 
         Ok(())
     }
