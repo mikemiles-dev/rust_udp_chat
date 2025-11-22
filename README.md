@@ -138,22 +138,37 @@ CHAT_SERVER="tls://milesrust.chat:8443" CHAT_USERNAME="YourName" ./rust_chat_cli
 CHAT_SERVER_ADDR="0.0.0.0:8080" CHAT_SERVER_MAX_CLIENTS="100" ./rust_chat_server-<platform>
 ```
 
-### Using Docker (Easiest)
+### Using Docker
 
-Connect to the live server instantly with Docker:
+Connect to the live server instantly with Docker (no installation required):
 
 ```bash
 # Interactive mode (will prompt for username)
 docker run -it --rm ghcr.io/mikemiles-dev/rust_chat-client:latest
 
-# Or specify everything upfront
+# Connect to live server with username
 docker run -it --rm \
   -e CHAT_SERVER=tls://milesrust.chat:8443 \
   -e CHAT_USERNAME=YourName \
   ghcr.io/mikemiles-dev/rust_chat-client:latest
+
+# Connect to local server
+docker run -it --rm \
+  -e CHAT_SERVER=127.0.0.1:8080 \
+  -e CHAT_USERNAME=YourName \
+  ghcr.io/mikemiles-dev/rust_chat-client:latest
 ```
 
-No installation required! Docker will automatically pull the latest client image.
+**Image Details:**
+- **Registry**: `ghcr.io/mikemiles-dev/rust_chat-client`
+- **Tags**: `latest`, version tags (e.g., `v1.0.0`)
+- **Platforms**: linux/amd64, linux/arm64
+
+To build your own image:
+```bash
+docker build -f client/Dockerfile -t rust-chat-client .
+docker run -it --rm rust-chat-client
+```
 
 ### Local Development
 
@@ -572,51 +587,6 @@ Messages are sent over TCP with a custom chunked protocol that supports:
 - User list requests
 - Error messages
 
-## Docker Image
-
-The client is available as a Docker image for easy deployment and testing:
-
-### Image Information
-
-- **Registry**: GitHub Container Registry (ghcr.io)
-- **Image**: `ghcr.io/michaelmileusnich/rust_chat-client`
-- **Tags**: `latest`, version tags (e.g., `v1.0.0`), branch tags
-- **Platforms**: linux/amd64, linux/arm64
-
-### Usage Examples
-
-```bash
-# Connect to live server
-docker run -it --rm \
-  -e CHAT_SERVER=tls://milesrust.chat:8443 \
-  -e CHAT_USERNAME=Alice \
-  ghcr.io/michaelmileusnich/rust_chat-client:latest
-
-# Connect to local server
-docker run -it --rm \
-  -e CHAT_SERVER=127.0.0.1:8080 \
-  -e CHAT_USERNAME=Bob \
-  ghcr.io/michaelmileusnich/rust_chat-client:latest
-
-# Interactive mode (prompts for server and username)
-docker run -it --rm ghcr.io/michaelmileusnich/rust_chat-client:latest
-
-# Use specific version
-docker run -it --rm ghcr.io/michaelmileusnich/rust_chat-client:v1.0.0
-```
-
-### Building Your Own Image
-
-```bash
-# Build the client image
-docker build -f client/Dockerfile -t rust-chat-client .
-
-# Run your local build
-docker run -it --rm rust-chat-client
-```
-
-The image is automatically built and published via GitHub Actions on every push to main.
-
 ## Building from Source
 
 ### Development Build
@@ -701,11 +671,11 @@ This project is available for educational and personal use.
 
 ## Future Enhancements
 
-- [x] **TLS/SSL encryption** - ✅ Implemented with native TLS (tokio-rustls)
+- [x] **TLS/SSL encryption** - Implemented with native TLS (tokio-rustls)
+- [x] **File sharing** - Send files up to 10MB with `/send` command
 - [ ] End-to-end encryption for direct messages
 - [ ] User authentication system
 - [ ] Chat rooms/channels
 - [ ] Message history and persistence
-- [ ] File sharing capabilities
 - [ ] Read timeouts for slowloris protection
 - [ ] GUI client
