@@ -3,27 +3,20 @@ use rustyline::highlight::Highlighter;
 use rustyline::hint::Hinter;
 use rustyline::validate::Validator;
 use rustyline::{Context, Helper};
+use shared::commands::client as commands;
 use std::collections::HashSet;
 use std::sync::{Arc, RwLock};
 
 /// Client command and username completer
 pub struct ClientCompleter {
-    commands: Vec<String>,
+    commands: Vec<&'static str>,
     users: Arc<RwLock<HashSet<String>>>,
 }
 
 impl ClientCompleter {
     pub fn new(users: Arc<RwLock<HashSet<String>>>) -> Self {
         Self {
-            commands: vec![
-                "/help".to_string(),
-                "/quit".to_string(),
-                "/list".to_string(),
-                "/dm".to_string(),
-                "/r".to_string(),
-                "/send".to_string(),
-                "/rename".to_string(),
-            ],
+            commands: commands::completion_names(),
             users,
         }
     }
@@ -52,7 +45,7 @@ impl ClientCompleter {
             self.commands
                 .iter()
                 .filter(|cmd| cmd.starts_with(trimmed))
-                .cloned()
+                .map(|s| s.to_string())
                 .collect()
         } else {
             vec![]

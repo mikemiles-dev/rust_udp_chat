@@ -1,3 +1,4 @@
+pub mod commands;
 pub mod input;
 pub mod logger;
 pub mod message;

@@ -1,3 +1,4 @@
+use shared::commands::server as commands;
 use shared::logger;
 use shared::message::ChatMessage;
 use std::collections::{HashMap, HashSet};
@@ -337,15 +338,9 @@ impl ChatServer {
     }
 
     fn handle_help(&self) {
-        logger::log_info("Available server commands:");
-        logger::log_info("  /list                    - List all connected users");
-        logger::log_info("  /kick <user>             - Kick a user from the server");
-        logger::log_info("  /rename <user> <newname> - Rename a user");
-        logger::log_info("  /ban <user|ip>           - Ban a user by name or IP address");
-        logger::log_info("  /unban <ip>              - Unban an IP address");
-        logger::log_info("  /banlist                 - List all banned IPs");
-        logger::log_info("  /help                    - Show this help message");
-        logger::log_info("  /quit                    - Shutdown the server");
+        for line in commands::help_text() {
+            logger::log_info(&line);
+        }
     }
 }
 

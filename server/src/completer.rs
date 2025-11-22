@@ -3,23 +3,17 @@ use rustyline::highlight::Highlighter;
 use rustyline::hint::Hinter;
 use rustyline::validate::Validator;
 use rustyline::{Context, Helper};
+use shared::commands::server as commands;
 
 /// Server command completer
 pub struct ServerCompleter {
-    commands: Vec<String>,
+    commands: Vec<&'static str>,
 }
 
 impl ServerCompleter {
     pub fn new() -> Self {
         Self {
-            commands: vec![
-                "/help".to_string(),
-                "/h".to_string(),
-                "/quit".to_string(),
-                "/q".to_string(),
-                "/list".to_string(),
-                "/kick".to_string(),
-            ],
+            commands: commands::completion_names(),
         }
     }
 
@@ -30,7 +24,7 @@ impl ServerCompleter {
             self.commands
                 .iter()
                 .filter(|cmd| cmd.starts_with(trimmed))
-                .cloned()
+                .map(|s| s.to_string())
                 .collect()
         } else {
             vec![]

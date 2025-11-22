@@ -1,5 +1,6 @@
 use crate::input::{self, ClientUserInput};
 use crate::readline_helper;
+use shared::commands::client as commands;
 use shared::logger;
 use shared::message::{ChatMessage, ChatMessageError, MessageTypes};
 use shared::network::{TcpMessageHandler, MAX_FILE_SIZE};
@@ -496,16 +497,9 @@ impl ChatClient {
                 }
             }
             input::ClientUserInput::Help => {
-                logger::log_info("Available commands:");
-                logger::log_info("  /help - Show this help message");
-                logger::log_info("  /list - List all users (with statuses)");
-                logger::log_info("  /dm <username> <message> - Send direct message");
-                logger::log_info("  /r <message> - Reply to last direct message");
-                logger::log_info("  /send <username> <filepath> - Send a file (max 10MB)");
-                logger::log_info("  /rename <new_name> - Change your username");
-                logger::log_info("  /status <message> - Set your status (visible in /list)");
-                logger::log_info("  /status - Clear your status");
-                logger::log_info("  /quit - Exit the chat");
+                for line in commands::help_text() {
+                    logger::log_info(&line);
+                }
                 Ok(())
             }
             input::ClientUserInput::ListUsers => {
