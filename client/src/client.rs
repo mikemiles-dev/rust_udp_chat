@@ -7,7 +7,7 @@ use shared::logger;
 use shared::message::{ChatMessage, ChatMessageError, MessageTypes};
 use shared::network::{MAX_FILE_SIZE, TcpMessageHandler};
 use shared::version::VERSION;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io;
 use std::net::AddrParseError;
 use std::path::Path;
@@ -20,6 +20,26 @@ use tokio::net::TcpStream;
 use tokio::time::sleep;
 use tokio_rustls::TlsConnector;
 use tokio_rustls::client::TlsStream;
+
+/// Pending file transfer request (for senders waiting for acceptance)
+#[derive(Debug, Clone)]
+pub struct PendingOutgoingTransfer {
+    pub recipient: String,
+    pub file_path: String,
+    pub file_name: String,
+    #[allow(dead_code)]
+    pub file_size: usize,
+}
+
+/// Pending file transfer request (for receivers)
+#[derive(Debug, Clone)]
+pub struct PendingIncomingTransfer {
+    #[allow(dead_code)]
+    pub sender: String,
+    pub file_name: String,
+    #[allow(dead_code)]
+    pub file_size: usize,
+}
 
 #[derive(Debug)]
 pub enum ChatClientError {
@@ -101,6 +121,10 @@ pub struct ChatClient {
     connected_users: Arc<RwLock<HashSet<String>>>,
     was_kicked: bool,
     current_status: Option<String>,
+    /// Pending outgoing transfers (keyed by recipient name)
+    pending_outgoing: HashMap<String, PendingOutgoingTransfer>,
+    /// Pending incoming transfers (keyed by sender name)
+    pending_incoming: HashMap<String, PendingIncomingTransfer>,
 }
 
 impl ChatClient {
@@ -154,6 +178,8 @@ impl ChatClient {
             connected_users: Arc::new(RwLock::new(HashSet::new())),
             was_kicked: false,
             current_status: None,
+            pending_outgoing: HashMap::new(),
+            pending_incoming: HashMap::new(),
         })
     }
 
@@ -368,6 +394,12 @@ impl ChatClient {
                     logger::log_success(&content);
                 }
             }
+            MessageTypes::FileTransferRequest => {
+                self.handle_file_transfer_request(&message);
+            }
+            MessageTypes::FileTransferResponse => {
+                return self.handle_file_transfer_response(&message).await;
+            }
             MessageTypes::SetStatus => {
                 if let Some(content) = self.get_message_content(&message, "status") {
                     logger::log_success(&content);
@@ -506,6 +538,212 @@ impl ChatClient {
         }
     }
 
+    fn handle_file_transfer_request(&mut self, message: &ChatMessage) {
+        let content = match message.get_content() {
+            Some(c) => c,
+            None => {
+                logger::log_error("Received empty file transfer request");
+                return;
+            }
+        };
+
+        // Parse binary format: recipient_len(1)|recipient|sender_len(1)|sender|filename_len(1)|filename|filesize(8 bytes)
+        if content.len() < 2 {
+            logger::log_error("Invalid file transfer request format");
+            return;
+        }
+
+        // Extract recipient
+        let recipient_len = content[0] as usize;
+        if content.len() < 1 + recipient_len + 1 {
+            logger::log_error("Invalid file transfer request format");
+            return;
+        }
+
+        let recipient = match std::str::from_utf8(&content[1..1 + recipient_len]) {
+            Ok(s) => s,
+            Err(_) => {
+                logger::log_error("Invalid recipient name in file transfer request");
+                return;
+            }
+        };
+
+        // Check if this request is for us
+        if recipient != self.chat_name {
+            return; // Not for us, ignore
+        }
+
+        // Extract sender
+        let sender_start = 1 + recipient_len;
+        let sender_len = content[sender_start] as usize;
+        if content.len() < sender_start + 1 + sender_len + 1 {
+            logger::log_error("Invalid file transfer request format");
+            return;
+        }
+
+        let sender =
+            match std::str::from_utf8(&content[sender_start + 1..sender_start + 1 + sender_len]) {
+                Ok(s) => s,
+                Err(_) => {
+                    logger::log_error("Invalid sender name in file transfer request");
+                    return;
+                }
+            };
+
+        // Extract filename
+        let filename_len_pos = sender_start + 1 + sender_len;
+        let filename_len = content[filename_len_pos] as usize;
+        let filename_start = filename_len_pos + 1;
+        if content.len() < filename_start + filename_len + 8 {
+            logger::log_error("Invalid file transfer request format");
+            return;
+        }
+
+        let filename =
+            match std::str::from_utf8(&content[filename_start..filename_start + filename_len]) {
+                Ok(s) => s,
+                Err(_) => {
+                    logger::log_error("Invalid filename in file transfer request");
+                    return;
+                }
+            };
+
+        // Extract file size (8 bytes, big-endian u64)
+        let size_start = filename_start + filename_len;
+        let file_size = u64::from_be_bytes([
+            content[size_start],
+            content[size_start + 1],
+            content[size_start + 2],
+            content[size_start + 3],
+            content[size_start + 4],
+            content[size_start + 5],
+            content[size_start + 6],
+            content[size_start + 7],
+        ]) as usize;
+
+        // Store the pending transfer
+        self.pending_incoming.insert(
+            sender.to_string(),
+            PendingIncomingTransfer {
+                sender: sender.to_string(),
+                file_name: filename.to_string(),
+                file_size,
+            },
+        );
+
+        // Format file size for display
+        let size_display = if file_size >= 1024 * 1024 {
+            format!("{:.1} MB", file_size as f64 / (1024.0 * 1024.0))
+        } else if file_size >= 1024 {
+            format!("{:.1} KB", file_size as f64 / 1024.0)
+        } else {
+            format!("{} bytes", file_size)
+        };
+
+        logger::log_warning(&format!(
+            "[FILE REQUEST from {}]: '{}' ({})",
+            sender, filename, size_display
+        ));
+        logger::log_info(&format!(
+            "Use /accept {} to accept or /reject {} to decline",
+            sender, sender
+        ));
+    }
+
+    async fn handle_file_transfer_response(&mut self, message: &ChatMessage) -> bool {
+        let content = match message.get_content() {
+            Some(c) => c,
+            None => {
+                logger::log_error("Received empty file transfer response");
+                return true;
+            }
+        };
+
+        // Parse format: recipient_len(1)|recipient|sender_len(1)|sender|accepted(1)
+        if content.len() < 2 {
+            logger::log_error("Invalid file transfer response format");
+            return true;
+        }
+
+        // Extract recipient (original sender of the file request)
+        let recipient_len = content[0] as usize;
+        if content.len() < 1 + recipient_len + 1 {
+            logger::log_error("Invalid file transfer response format");
+            return true;
+        }
+
+        let recipient = match std::str::from_utf8(&content[1..1 + recipient_len]) {
+            Ok(s) => s,
+            Err(_) => {
+                logger::log_error("Invalid recipient name in file transfer response");
+                return true;
+            }
+        };
+
+        // Check if this response is for us (we're the original sender)
+        if recipient != self.chat_name {
+            return true; // Not for us, ignore
+        }
+
+        // Extract sender (the one who accepted/rejected)
+        let sender_start = 1 + recipient_len;
+        let sender_len = content[sender_start] as usize;
+        if content.len() < sender_start + 1 + sender_len + 1 {
+            logger::log_error("Invalid file transfer response format");
+            return true;
+        }
+
+        let responder =
+            match std::str::from_utf8(&content[sender_start + 1..sender_start + 1 + sender_len]) {
+                Ok(s) => s,
+                Err(_) => {
+                    logger::log_error("Invalid sender name in file transfer response");
+                    return true;
+                }
+            };
+
+        // Extract accepted flag
+        let accepted_pos = sender_start + 1 + sender_len;
+        let accepted = content[accepted_pos] == 1;
+
+        if accepted {
+            // Look up the pending transfer and send the file
+            if let Some(transfer) = self.pending_outgoing.remove(responder) {
+                logger::log_success(&format!(
+                    "{} accepted file transfer for '{}'",
+                    responder, transfer.file_name
+                ));
+                // Actually send the file now
+                if let Err(e) = self
+                    .send_file_data(&transfer.recipient, &transfer.file_path)
+                    .await
+                {
+                    logger::log_error(&format!("Failed to send file: {:?}", e));
+                }
+            } else {
+                logger::log_warning(&format!(
+                    "Received acceptance from {} but no pending transfer found",
+                    responder
+                ));
+            }
+        } else {
+            // Remove the pending transfer
+            if let Some(transfer) = self.pending_outgoing.remove(responder) {
+                logger::log_warning(&format!(
+                    "{} rejected file transfer for '{}'",
+                    responder, transfer.file_name
+                ));
+            } else {
+                logger::log_warning(&format!(
+                    "Received rejection from {} but no pending transfer found",
+                    responder
+                ));
+            }
+        }
+
+        true
+    }
+
     async fn handle_user_input(
         &mut self,
         user_input: input::ClientUserInput,
@@ -582,7 +820,13 @@ impl ChatClient {
             input::ClientUserInput::SendFile {
                 recipient,
                 file_path,
-            } => self.send_file(&recipient, &file_path).await,
+            } => self.send_file_request(&recipient, &file_path).await,
+            input::ClientUserInput::AcceptFile { sender } => {
+                self.accept_file_transfer(&sender).await
+            }
+            input::ClientUserInput::RejectFile { sender } => {
+                self.reject_file_transfer(&sender).await
+            }
             input::ClientUserInput::Status(status) => {
                 // Store status locally so we can restore it after reconnection
                 self.current_status = status.clone();
@@ -601,12 +845,102 @@ impl ChatClient {
         }
     }
 
-    async fn send_file(&mut self, recipient: &str, file_path: &str) -> Result<(), ChatClientError> {
+    /// Send a file transfer request (not the actual file data)
+    async fn send_file_request(
+        &mut self,
+        recipient: &str,
+        file_path: &str,
+    ) -> Result<(), ChatClientError> {
         let path = Path::new(file_path);
 
         // Check if file exists
         if !path.exists() {
             logger::log_error(&format!("File not found: {}", file_path));
+            return Ok(());
+        }
+
+        // Get file metadata
+        let metadata = match std::fs::metadata(path) {
+            Ok(m) => m,
+            Err(e) => {
+                logger::log_error(&format!("Failed to read file metadata: {}", e));
+                return Ok(());
+            }
+        };
+
+        let file_size = metadata.len() as usize;
+
+        // Check file size (100MB limit, minus some overhead for metadata)
+        let max_content_size = MAX_FILE_SIZE - 1024; // Leave room for headers
+        if file_size > max_content_size {
+            logger::log_error(&format!(
+                "File too large: {} bytes (max {} bytes / ~100MB)",
+                file_size, max_content_size
+            ));
+            return Ok(());
+        }
+
+        // Get file name
+        let file_name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("unknown");
+
+        // Format file size for display
+        let size_display = if file_size >= 1024 * 1024 {
+            format!("{:.1} MB", file_size as f64 / (1024.0 * 1024.0))
+        } else if file_size >= 1024 {
+            format!("{:.1} KB", file_size as f64 / 1024.0)
+        } else {
+            format!("{} bytes", file_size)
+        };
+
+        logger::log_info(&format!(
+            "Requesting to send '{}' ({}) to {}...",
+            file_name, size_display, recipient
+        ));
+
+        // Store the pending transfer
+        self.pending_outgoing.insert(
+            recipient.to_string(),
+            PendingOutgoingTransfer {
+                recipient: recipient.to_string(),
+                file_path: file_path.to_string(),
+                file_name: file_name.to_string(),
+                file_size,
+            },
+        );
+
+        // Build file transfer request message
+        // Format: recipient_len(1)|recipient|filename_len(1)|filename|filesize(8 bytes)
+        let mut content = Vec::new();
+        content.push(recipient.len() as u8);
+        content.extend_from_slice(recipient.as_bytes());
+        content.push(file_name.len() as u8);
+        content.extend_from_slice(file_name.as_bytes());
+        content.extend_from_slice(&(file_size as u64).to_be_bytes());
+
+        let message = ChatMessage::try_new(MessageTypes::FileTransferRequest, Some(content))?;
+        self.send_message_chunked(message).await?;
+
+        logger::log_info(&format!(
+            "File transfer request sent. Waiting for {} to accept...",
+            recipient
+        ));
+        Ok(())
+    }
+
+    /// Actually send the file data (called after recipient accepts)
+    async fn send_file_data(
+        &mut self,
+        recipient: &str,
+        file_path: &str,
+    ) -> Result<(), ChatClientError> {
+        let path = Path::new(file_path);
+
+        // Check if file still exists
+        if !path.exists() {
+            logger::log_error(&format!("File no longer exists: {}", file_path));
             return Ok(());
         }
 
@@ -624,17 +958,6 @@ impl ChatClient {
                 return Ok(());
             }
         };
-
-        // Check file size (10MB limit, minus some overhead for metadata)
-        let max_content_size = MAX_FILE_SIZE - 1024; // Leave room for headers
-        if file_data.len() > max_content_size {
-            logger::log_error(&format!(
-                "File too large: {} bytes (max {} bytes / ~10MB)",
-                file_data.len(),
-                max_content_size
-            ));
-            return Ok(());
-        }
 
         logger::log_info(&format!(
             "Sending file '{}' ({} bytes) to {}...",
@@ -657,6 +980,56 @@ impl ChatClient {
 
         logger::log_success(&format!("File '{}' sent to {}", file_name, recipient));
         Ok(())
+    }
+
+    /// Accept a pending file transfer
+    async fn accept_file_transfer(&mut self, sender: &str) -> Result<(), ChatClientError> {
+        // Check if there's a pending transfer from this sender
+        if let Some(transfer) = self.pending_incoming.remove(sender) {
+            logger::log_info(&format!(
+                "Accepting file '{}' from {}...",
+                transfer.file_name, sender
+            ));
+
+            // Build response message
+            // Format: sender_len(1)|sender|accepted(1)
+            let mut content = Vec::new();
+            content.push(sender.len() as u8);
+            content.extend_from_slice(sender.as_bytes());
+            content.push(1u8); // accepted = true
+
+            let message = ChatMessage::try_new(MessageTypes::FileTransferResponse, Some(content))?;
+            self.send_message_chunked(message).await?;
+            Ok(())
+        } else {
+            logger::log_error(&format!("No pending file transfer from '{}'", sender));
+            Ok(())
+        }
+    }
+
+    /// Reject a pending file transfer
+    async fn reject_file_transfer(&mut self, sender: &str) -> Result<(), ChatClientError> {
+        // Check if there's a pending transfer from this sender
+        if let Some(transfer) = self.pending_incoming.remove(sender) {
+            logger::log_info(&format!(
+                "Rejecting file '{}' from {}",
+                transfer.file_name, sender
+            ));
+
+            // Build response message
+            // Format: sender_len(1)|sender|accepted(1)
+            let mut content = Vec::new();
+            content.push(sender.len() as u8);
+            content.extend_from_slice(sender.as_bytes());
+            content.push(0u8); // accepted = false
+
+            let message = ChatMessage::try_new(MessageTypes::FileTransferResponse, Some(content))?;
+            self.send_message_chunked(message).await?;
+            Ok(())
+        } else {
+            logger::log_error(&format!("No pending file transfer from '{}'", sender));
+            Ok(())
+        }
     }
 
     pub async fn run(&mut self) -> io::Result<()> {

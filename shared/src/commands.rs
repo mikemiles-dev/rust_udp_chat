@@ -88,7 +88,15 @@ pub mod client {
 
     pub const SEND: Command = Command::new("/send")
         .with_usage("<username> <filepath>")
-        .with_description("Send a file (max 10MB)");
+        .with_description("Send a file (max 100MB, requires acceptance)");
+
+    pub const ACCEPT: Command = Command::new("/accept")
+        .with_usage("<sender>")
+        .with_description("Accept a pending file transfer");
+
+    pub const REJECT: Command = Command::new("/reject")
+        .with_usage("<sender>")
+        .with_description("Reject a pending file transfer");
 
     pub const RENAME: Command = Command::new("/rename")
         .with_usage("<new_name>")
@@ -101,7 +109,9 @@ pub mod client {
     pub const STATUS_CLEAR: Command = Command::new("/status").with_description("Clear your status");
 
     /// All client commands (for completion - excludes STATUS_CLEAR as it's same command)
-    pub const ALL: &[Command] = &[HELP, LIST, DM, REPLY, SEND, RENAME, STATUS, QUIT];
+    pub const ALL: &[Command] = &[
+        HELP, LIST, DM, REPLY, SEND, ACCEPT, REJECT, RENAME, STATUS, QUIT,
+    ];
 
     /// All help entries (includes STATUS_CLEAR for documentation)
     pub const HELP_ENTRIES: &[Command] = &[
@@ -110,6 +120,8 @@ pub mod client {
         DM,
         REPLY,
         SEND,
+        ACCEPT,
+        REJECT,
         RENAME,
         STATUS,
         STATUS_CLEAR,
@@ -191,7 +203,9 @@ mod tests {
         assert!(names.contains(&"/help"));
         assert!(names.contains(&"/dm"));
         assert!(names.contains(&"/status"));
-        assert_eq!(names.len(), 8); // 8 commands, no aliases
+        assert!(names.contains(&"/accept"));
+        assert!(names.contains(&"/reject"));
+        assert_eq!(names.len(), 10); // 10 commands, no aliases
     }
 
     #[test]

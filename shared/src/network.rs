@@ -3,7 +3,7 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 pub const CHUNK_SIZE: usize = 8192;
 pub const MAX_MESSAGE_SIZE: usize = 8192; // 8KB max message size for regular messages
-pub const MAX_FILE_SIZE: usize = 10 * 1024 * 1024; // 10MB max file size
+pub const MAX_FILE_SIZE: usize = 100 * 1024 * 1024; // 100MB max file size
 
 pub enum TcpMessageHandlerError {
     IoError(std::io::Error),

@@ -16,6 +16,12 @@ pub enum ClientUserInput {
         recipient: String,
         file_path: String,
     },
+    AcceptFile {
+        sender: String,
+    },
+    RejectFile {
+        sender: String,
+    },
     Status(Option<String>),
     Quit,
 }
@@ -72,6 +78,20 @@ impl TryFrom<&str> for ClientUserInput {
                     recipient,
                     file_path,
                 })
+            }
+        } else if commands::ACCEPT.matches(cmd) {
+            if parts.len() < 2 {
+                Err(UserInputError::InvalidCommand)
+            } else {
+                let sender = parts[1].to_string();
+                Ok(ClientUserInput::AcceptFile { sender })
+            }
+        } else if commands::REJECT.matches(cmd) {
+            if parts.len() < 2 {
+                Err(UserInputError::InvalidCommand)
+            } else {
+                let sender = parts[1].to_string();
+                Ok(ClientUserInput::RejectFile { sender })
             }
         } else if commands::STATUS.matches(cmd) {
             if parts.len() < 2 {

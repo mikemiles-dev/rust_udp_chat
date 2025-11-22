@@ -10,7 +10,7 @@ A modern, colorful terminal-based chat application written in Rust with async/aw
 - 👥 **Multi-user Support** - Multiple clients can connect simultaneously
 - 🔄 **Real-time Messaging** - Instant message broadcasting to all connected users
 - 💬 **Direct Messaging** - Send private messages to specific users with `/dm` and `/r` commands
-- 📁 **File Transfer** - Send files up to 10MB to other users with `/send` command
+- 📁 **File Transfer** - Send files up to 100MB to other users with `/send` command (requires acceptance)
 - 🏷️ **Username Colorization** - Each user gets a unique, consistent color
 - ⚡ **Async I/O** - Built on Tokio for high-performance async networking
 - 🔧 **Modular Architecture** - Clean separation between client, server, and shared code
@@ -264,7 +264,9 @@ Once connected to the server, clients can use the following commands:
 - `/list` - List all connected users (with their status if set)
 - `/dm <USERNAME> <MESSAGE>` - Send a direct message to a specific user
 - `/r <MESSAGE>` - Reply to the last user who sent you a DM
-- `/send <USERNAME> <FILEPATH>` - Send a file to a specific user (max 10MB)
+- `/send <USERNAME> <FILEPATH>` - Request to send a file to a specific user (max 100MB)
+- `/accept <USERNAME>` - Accept a pending file transfer from a user
+- `/reject <USERNAME>` - Reject a pending file transfer from a user
 - `/rename <NEW_NAME>` - Change your username
 - `/status <MESSAGE>` - Set your status (visible in `/list`)
 - `/status` - Clear your status
@@ -525,19 +527,36 @@ Send private messages to specific users:
 
 ### File Transfer
 
-Send files directly to other users:
-- **Send a file**: `/send <username> <filepath>` - Send any file up to 10MB
-- **Auto-save**: Received files are automatically saved to `downloads/` directory
+Send files directly to other users with acceptance:
+- **Request transfer**: `/send <username> <filepath>` - Request to send any file up to 100MB
+- **Accept transfer**: `/accept <sender>` - Accept a pending file transfer
+- **Reject transfer**: `/reject <sender>` - Reject a pending file transfer
+- **Auto-save**: Accepted files are automatically saved to `downloads/` directory
 - **Privacy**: Files are sent directly to the recipient (server relays but doesn't store)
 - **Validation**: Server validates recipient exists before transferring
 - **Supported**: All file types (images, documents, archives, etc.)
 
 Example:
 ```bash
-# Send a file
+# Sender requests to send a file
 /send Alice /path/to/document.pdf
+# Output: Requesting to send 'document.pdf' (1.2 MB) to Alice...
+# Output: File transfer request sent. Waiting for Alice to accept...
 
-# Recipient sees:
+# Recipient (Alice) sees:
+[FILE REQUEST from Bob]: 'document.pdf' (1.2 MB)
+Use /accept Bob to accept or /reject Bob to decline
+
+# Alice accepts:
+/accept Bob
+# Output: Accepting file 'document.pdf' from Bob...
+
+# Bob's client then sends the file:
+# Output: Bob accepted file transfer for 'document.pdf'
+# Output: Sending file 'document.pdf' (1234567 bytes) to Alice...
+# Output: File 'document.pdf' sent to Alice
+
+# Alice receives:
 [FILE from Bob]: 'document.pdf' (1234567 bytes)
 File saved to: downloads/document.pdf
 ```
@@ -595,7 +614,7 @@ The application implements comprehensive security measures to protect against co
 | Security Feature | Implementation |
 |-----------------|----------------|
 | Max Message Size | 8KB |
-| Max File Size | 10MB |
+| Max File Size | 100MB |
 | Max Username Length | 32 characters |
 | Max Message Content | 1KB |
 | Rate Limit | 10 messages/second |
@@ -718,7 +737,7 @@ This project is available for educational and personal use.
 ## Future Enhancements
 
 - [x] **TLS/SSL encryption** - Implemented with native TLS (tokio-rustls)
-- [x] **File sharing** - Send files up to 10MB with `/send` command
+- [x] **File sharing** - Send files up to 100MB with `/send` command (requires recipient acceptance)
 - [ ] End-to-end encryption for direct messages
 - [ ] User authentication system
 - [ ] Chat rooms/channels

@@ -8,12 +8,14 @@ pub enum MessageTypes {
     DirectMessage,
     Error,
     RenameRequest,
-    FileTransfer,    // File data being sent: recipient|sender|filename|data
-    FileTransferAck, // Acknowledgment that file was received
-    SetStatus,       // Set user's status message
-    Ping,            // Server heartbeat to check if client is alive
-    Pong,            // Client response to Ping
-    VersionCheck,    // Client sends version to server on connection: version string
+    FileTransfer,         // File data being sent: recipient|sender|filename|data
+    FileTransferAck,      // Acknowledgment that file was received
+    FileTransferRequest,  // Request to send file: recipient|filename|filesize
+    FileTransferResponse, // Response to request: sender|accepted (0/1)
+    SetStatus,            // Set user's status message
+    Ping,                 // Server heartbeat to check if client is alive
+    Pong,                 // Client response to Ping
+    VersionCheck,         // Client sends version to server on connection: version string
     VersionMismatch, // Server responds with mismatch error: client_version|server_version|readme_url
     Unknown(u8),
 }
@@ -31,11 +33,13 @@ impl From<u8> for MessageTypes {
             8 => MessageTypes::RenameRequest,
             9 => MessageTypes::FileTransfer,
             10 => MessageTypes::FileTransferAck,
-            11 => MessageTypes::SetStatus,
-            12 => MessageTypes::Ping,
-            13 => MessageTypes::Pong,
-            14 => MessageTypes::VersionCheck,
-            15 => MessageTypes::VersionMismatch,
+            11 => MessageTypes::FileTransferRequest,
+            12 => MessageTypes::FileTransferResponse,
+            13 => MessageTypes::SetStatus,
+            14 => MessageTypes::Ping,
+            15 => MessageTypes::Pong,
+            16 => MessageTypes::VersionCheck,
+            17 => MessageTypes::VersionMismatch,
             other => MessageTypes::Unknown(other),
         }
     }
@@ -134,11 +138,13 @@ impl From<ChatMessage> for Vec<u8> {
             MessageTypes::RenameRequest => 8,
             MessageTypes::FileTransfer => 9,
             MessageTypes::FileTransferAck => 10,
-            MessageTypes::SetStatus => 11,
-            MessageTypes::Ping => 12,
-            MessageTypes::Pong => 13,
-            MessageTypes::VersionCheck => 14,
-            MessageTypes::VersionMismatch => 15,
+            MessageTypes::FileTransferRequest => 11,
+            MessageTypes::FileTransferResponse => 12,
+            MessageTypes::SetStatus => 13,
+            MessageTypes::Ping => 14,
+            MessageTypes::Pong => 15,
+            MessageTypes::VersionCheck => 16,
+            MessageTypes::VersionMismatch => 17,
             MessageTypes::Unknown(val) => val,
         });
         if let Some(content) = message.content {
