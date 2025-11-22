@@ -1,5 +1,5 @@
-/// Centralized command definitions for client and server
-/// This module provides a single source of truth for command metadata
+//! Centralized command definitions for client and server
+//! This module provides a single source of truth for command metadata
 
 /// Represents a command with its metadata
 #[derive(Debug, Clone)]
@@ -50,7 +50,7 @@ impl Command {
 
     /// Check if the given string matches this command's name or alias
     pub fn matches(&self, cmd: &str) -> bool {
-        cmd == self.name || self.alias.map_or(false, |a| cmd == a)
+        cmd == self.name || self.alias == Some(cmd)
     }
 
     /// Format command for help display

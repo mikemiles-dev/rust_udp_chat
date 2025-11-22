@@ -240,10 +240,11 @@ impl ChatClient {
                     // Restore user's status if they had one set
                     if let Some(status) = &self.current_status {
                         let content = Some(status.clone().into_bytes());
-                        if let Ok(status_msg) = ChatMessage::try_new(MessageTypes::SetStatus, content) {
-                            if let Err(e) = self.send_message_chunked(status_msg).await {
-                                logger::log_warning(&format!("Failed to restore status: {:?}", e));
-                            }
+                        if let Ok(status_msg) =
+                            ChatMessage::try_new(MessageTypes::SetStatus, content)
+                            && let Err(e) = self.send_message_chunked(status_msg).await
+                        {
+                            logger::log_warning(&format!("Failed to restore status: {:?}", e));
                         }
                     }
 
@@ -555,7 +556,13 @@ impl ChatClient {
                 self.send_message_chunked(message).await?;
                 Ok(())
             }
-            input::ClientUserInput::Quit => Ok(()),
+            input::ClientUserInput::Quit => {
+                // Send Leave message to server so it knows this is an explicit quit
+                // (as opposed to a connection drop that might be a reconnection)
+                let message = ChatMessage::try_new(MessageTypes::Leave, None)?;
+                let _ = self.send_message_chunked(message).await;
+                Ok(())
+            }
         }
     }
 

@@ -102,6 +102,10 @@ impl<'a> MessageHandlers<'a> {
                 self.process_set_status(message.content_as_string(), &mut tcp_handler, chat_name)
                     .await?;
             }
+            MessageTypes::Leave => {
+                // User explicitly quit - signal this to the connection handler
+                return Err(UserConnectionError::ExplicitQuit);
+            }
             _ => (),
         }
         Ok(())

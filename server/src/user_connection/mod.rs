@@ -81,6 +81,8 @@ pub struct UserConnection {
     user_statuses: Arc<RwLock<HashMap<String, String>>>,
     chat_name: Option<String>,
     rate_limiter: RateLimiter,
+    /// True if user explicitly quit (vs connection drop which may be a reconnect)
+    clear_status_on_disconnect: bool,
 }
 
 impl TcpMessageHandler for UserConnection {
@@ -110,6 +112,7 @@ impl UserConnection {
             user_statuses,
             chat_name: None,
             rate_limiter: RateLimiter::new(RATE_LIMIT_MESSAGES, RATE_LIMIT_WINDOW),
+            clear_status_on_disconnect: false,
         }
     }
 
@@ -132,6 +135,7 @@ impl UserConnection {
             user_statuses,
             chat_name: None,
             rate_limiter: RateLimiter::new(RATE_LIMIT_MESSAGES, RATE_LIMIT_WINDOW),
+            clear_status_on_disconnect: false,
         }
     }
 
@@ -162,8 +166,16 @@ impl UserConnection {
                                 continue;
                             }
 
-                            if let Err(e) = self.process_message(msg).await {
-                                logger::log_error(&format!("Error handling message from {}: {:?}", self.addr, e));
+                            match self.process_message(msg).await {
+                                Ok(()) => {}
+                                Err(UserConnectionError::ExplicitQuit) => {
+                                    // User explicitly quit - clear status on disconnect
+                                    self.clear_status_on_disconnect = true;
+                                    break;
+                                }
+                                Err(e) => {
+                                    logger::log_error(&format!("Error handling message from {}: {:?}", self.addr, e));
+                                }
                             }
                         }
                         Err(TcpMessageHandlerError::IoError(e)) => {
@@ -206,6 +218,8 @@ impl UserConnection {
                                 ) {
                                     let _ = self.send_message_chunked(kick_msg).await;
                                 }
+                                // Clear status when kicked
+                                self.clear_status_on_disconnect = true;
                                 break;
                             }
                         }
@@ -253,6 +267,8 @@ impl UserConnection {
                                 ) {
                                     let _ = self.send_message_chunked(ban_msg).await;
                                 }
+                                // Clear status when banned
+                                self.clear_status_on_disconnect = true;
                                 break;
                             }
                         }
@@ -296,10 +312,13 @@ impl UserConnection {
             ips.remove(chat_name);
             drop(ips);
 
-            // Remove user's status
-            let mut statuses = self.user_statuses.write().await;
-            statuses.remove(chat_name);
-            drop(statuses);
+            // Only remove status on explicit quit/kick/ban, not on connection drops
+            // (which may be reconnection attempts)
+            if self.clear_status_on_disconnect {
+                let mut statuses = self.user_statuses.write().await;
+                statuses.remove(chat_name);
+                drop(statuses);
+            }
 
             if let Ok(leave_message) =
                 ChatMessage::try_new(MessageTypes::Leave, Some(chat_name.clone().into_bytes()))

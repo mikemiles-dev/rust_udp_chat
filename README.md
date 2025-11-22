@@ -496,7 +496,8 @@ Set a custom status message that other users can see:
 - **Clear status**: `/status` - Remove your status
 - **View statuses**: Use `/list` to see all users with their statuses
 - **Max length**: 128 characters
-- **Auto-cleanup**: Status is automatically removed when you disconnect
+- **Persistence**: Status persists across reconnections (network drops, restarts)
+- **Auto-cleanup**: Status is cleared on explicit `/quit`, kick, or ban
 
 Example:
 ```bash

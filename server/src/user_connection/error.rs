@@ -9,6 +9,7 @@ pub enum UserConnectionError {
     BroadcastError(broadcast::error::SendError<(ChatMessage, SocketAddr)>),
     JoinError,
     InvalidMessage,
+    ExplicitQuit,
 }
 
 impl std::fmt::Display for UserConnectionError {
@@ -18,6 +19,7 @@ impl std::fmt::Display for UserConnectionError {
             UserConnectionError::BroadcastError(e) => write!(f, "Broadcast Error: {}", e),
             UserConnectionError::JoinError => write!(f, "Join Error: Username already taken"),
             UserConnectionError::InvalidMessage => write!(f, "Invalid Message Error"),
+            UserConnectionError::ExplicitQuit => write!(f, "User explicitly quit"),
         }
     }
 }

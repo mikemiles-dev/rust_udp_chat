@@ -1,6 +1,8 @@
+# 0.1.8
+ * Status now persists across reconnections but is cleared on explicit `/quit`, kick, or ban.
+
 # 0.1.7
  * Refactored command parsing to use shared command constants, eliminating duplication between command definitions and input parsing.
- * User status is now preserved across reconnections.
 
 # 0.1.6
  * Better client reconnection.
