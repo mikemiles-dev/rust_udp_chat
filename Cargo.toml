@@ -5,7 +5,7 @@ members = [ "server", "client", "shared"]
 [workspace.package]
 description = "Rust Chat Application using Tokio over TCP"
 edition = "2024"
-version = "0.1.10"
+version = "0.1.11"
 authors = ["michael.mileusnich@gmail.com"]
 readme = "README.md"
 

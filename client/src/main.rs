@@ -18,6 +18,15 @@ fn restore_terminal() {
     // Reset all attributes
     print!("\x1B[0m");
     let _ = io::stdout().flush();
+
+    // Also restore terminal from raw mode using stty
+    // This ensures the terminal is fully restored even if rustyline
+    // left it in an inconsistent state
+    #[cfg(unix)]
+    {
+        use std::process::Command;
+        let _ = Command::new("stty").arg("sane").status();
+    }
 }
 
 #[tokio::main]

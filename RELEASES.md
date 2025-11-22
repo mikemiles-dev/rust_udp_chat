@@ -1,3 +1,6 @@
+# 0.1.11
+ * Fixed terminal cursor disappearing after `/quit` command.
+
 # 0.1.10
  * Increased file transfer size limit from 10MB to 100MB.
  * File transfers now require recipient acceptance. Sender uses `/send <user> <file>`, recipient must `/accept <sender>` or `/reject <sender>`.
