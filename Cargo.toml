@@ -5,7 +5,7 @@ members = [ "server", "client", "shared"]
 [workspace.package]
 description = "Rust Chat Application using Tokio over TCP"
 edition = "2024"
-version = "0.1.11"
+version = "0.1.12"
 authors = ["michael.mileusnich@gmail.com"]
 readme = "README.md"
 
@@ -20,6 +20,7 @@ tokio-rustls = "0.26"
 rustls = "0.23"
 rustls-pemfile = "2.1"
 webpki-roots = "0.26"
+uuid = { version = "1", features = ["v4"] }
 
 [profile.release]
 strip = true

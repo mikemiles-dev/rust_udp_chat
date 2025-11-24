@@ -1,3 +1,4 @@
+use crate::ServerCommand;
 use rand::Rng;
 use shared::logger;
 use shared::message::{ChatMessage, MessageTypes};
@@ -32,9 +33,11 @@ pub const MAX_STATUS_LENGTH: usize = 128; // Max status message length
 pub struct MessageHandlers<'a> {
     pub addr: SocketAddr,
     pub tx: &'a broadcast::Sender<(ChatMessage, SocketAddr)>,
+    pub server_commands: &'a broadcast::Sender<ServerCommand>,
     pub connected_clients: &'a Arc<RwLock<HashSet<String>>>,
     pub user_ips: &'a Arc<RwLock<HashMap<String, IpAddr>>>,
     pub user_statuses: &'a Arc<RwLock<HashMap<String, String>>>,
+    pub user_sessions: &'a Arc<RwLock<HashMap<String, String>>>,
 }
 
 impl<'a> MessageHandlers<'a> {
@@ -278,24 +281,32 @@ impl<'a> MessageHandlers<'a> {
     ) -> Result<(), UserConnectionError> {
         let content = username.ok_or(UserConnectionError::InvalidMessage)?;
 
+        // Parse username and session token (format: username|session_token)
+        let (requested_username, session_token) = if let Some((user, token)) = content.split_once('|') {
+            (user.to_string(), Some(token.to_string()))
+        } else {
+            // Backwards compatibility: if no session token, just use the username
+            (content, None)
+        };
+
         // Validate username length
-        if content.is_empty() || content.len() > MAX_USERNAME_LENGTH {
+        if requested_username.is_empty() || requested_username.len() > MAX_USERNAME_LENGTH {
             logger::log_warning(&format!(
                 "Invalid username length from {}: {} chars",
                 self.addr,
-                content.len()
+                requested_username.len()
             ));
             return Err(UserConnectionError::InvalidMessage);
         }
 
         // Validate username characters (alphanumeric, underscore, hyphen only)
-        if !content
+        if !requested_username
             .chars()
             .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
         {
             logger::log_warning(&format!(
                 "Invalid username characters from {}: {}",
-                self.addr, content
+                self.addr, requested_username
             ));
             return Err(UserConnectionError::InvalidMessage);
         }
@@ -303,30 +314,78 @@ impl<'a> MessageHandlers<'a> {
         let connected_clients = self.connected_clients.clone();
         {
             let mut clients = connected_clients.write().await;
-            *chat_name = if !clients.insert(content.clone()) {
-                logger::log_warning(&format!("User '{}' already exists, renaming...", content));
-                let new_name = self.randomize_username(&content);
-                if !clients.insert(new_name.clone()) {
-                    logger::log_error(&format!(
-                        "Failed to assign random username to '{}'",
-                        content
+
+            // Check if username already exists
+            if clients.contains(&requested_username) {
+                // Username exists - check if this is a valid reconnection (same session token and IP)
+                let can_reclaim = if let Some(ref token) = session_token {
+                    let sessions = self.user_sessions.read().await;
+                    let ips = self.user_ips.read().await;
+
+                    let session_matches = sessions.get(&requested_username).is_some_and(|t| t == token);
+                    let ip_matches = ips.get(&requested_username).is_some_and(|ip| *ip == self.addr.ip());
+
+                    drop(sessions);
+                    drop(ips);
+
+                    session_matches && ip_matches
+                } else {
+                    false
+                };
+
+                if can_reclaim {
+                    // This is a valid reconnection - reclaim the ghost session
+                    logger::log_success(&format!(
+                        "User '{}' reclaiming ghost session from {} (same token and IP)",
+                        requested_username, self.addr
                     ));
-                    return Err(UserConnectionError::JoinError);
+
+                    // Signal the old connection to disconnect silently
+                    let _ = self.server_commands.send(ServerCommand::SessionTakeover(requested_username.clone()));
+
+                    // The username is already in the set, so we just claim it for this connection
+                    *chat_name = Some(requested_username.clone());
+                } else {
+                    // Not a valid reconnection - rename the user
+                    logger::log_warning(&format!("User '{}' already exists, renaming...", requested_username));
+                    let new_name = self.randomize_username(&requested_username);
+                    if !clients.insert(new_name.clone()) {
+                        logger::log_error(&format!(
+                            "Failed to assign random username to '{}'",
+                            requested_username
+                        ));
+                        return Err(UserConnectionError::JoinError);
+                    }
+                    logger::log_success(&format!("User '{}' renamed to '{}'", requested_username, new_name));
+                    let rename_message = ChatMessage::try_new(
+                        MessageTypes::UserRename,
+                        Some(new_name.clone().into_bytes()),
+                    )
+                    .map_err(|_| UserConnectionError::InvalidMessage)?;
+                    tcp_handler
+                        .send_message_chunked(rename_message)
+                        .await
+                        .map_err(UserConnectionError::IoError)?;
+                    *chat_name = Some(new_name.clone());
+
+                    // Store session token for the new name
+                    if let Some(token) = session_token {
+                        let mut sessions = self.user_sessions.write().await;
+                        sessions.insert(new_name, token);
+                    }
                 }
-                logger::log_success(&format!("User '{}' renamed to '{}'", content, new_name));
-                let rename_message = ChatMessage::try_new(
-                    MessageTypes::UserRename,
-                    Some(new_name.clone().into_bytes()),
-                )
-                .map_err(|_| UserConnectionError::InvalidMessage)?;
-                tcp_handler
-                    .send_message_chunked(rename_message)
-                    .await
-                    .map_err(UserConnectionError::IoError)?;
-                Some(new_name)
             } else {
-                Some(content)
-            };
+                // Username is available - claim it
+                clients.insert(requested_username.clone());
+                *chat_name = Some(requested_username.clone());
+
+                // Store session token for this username
+                if let Some(token) = session_token {
+                    drop(clients); // Release clients lock before acquiring sessions lock
+                    let mut sessions = self.user_sessions.write().await;
+                    sessions.insert(requested_username.clone(), token);
+                }
+            }
         }
 
         if let Some(chat_name) = &chat_name {

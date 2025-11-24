@@ -20,6 +20,7 @@ use tokio::net::TcpStream;
 use tokio::time::sleep;
 use tokio_rustls::TlsConnector;
 use tokio_rustls::client::TlsStream;
+use uuid::Uuid;
 
 /// Pending file transfer request (for senders waiting for acceptance)
 #[derive(Debug, Clone)]
@@ -117,6 +118,8 @@ pub struct ChatClient {
     server_port: u16,
     use_tls: bool,
     chat_name: String,
+    /// Session token used to identify reconnecting clients and reclaim ghost sessions
+    session_token: String,
     last_dm_sender: Option<String>,
     connected_users: Arc<RwLock<HashSet<String>>>,
     was_kicked: bool,
@@ -168,12 +171,17 @@ impl ChatClient {
             ClientStream::Plain(stream)
         };
 
+        // Generate a unique session token for this client session
+        // This token is used to reclaim a ghost session on reconnection
+        let session_token = Uuid::new_v4().to_string();
+
         Ok(ChatClient {
             connection,
             server_host: host,
             server_port: port,
             use_tls,
             chat_name: name,
+            session_token,
             last_dm_sender: None,
             connected_users: Arc::new(RwLock::new(HashSet::new())),
             was_kicked: false,
@@ -212,9 +220,11 @@ impl ChatClient {
         )?;
         self.send_message_chunked(version_message).await?;
 
-        // Send join message with username
+        // Send join message with username and session token
+        // Format: username|session_token
+        let join_content = format!("{}|{}", self.chat_name, self.session_token);
         let chat_message =
-            ChatMessage::try_new(MessageTypes::Join, Some(self.chat_name.as_bytes().to_vec()))?;
+            ChatMessage::try_new(MessageTypes::Join, Some(join_content.into_bytes()))?;
         self.send_message_chunked(chat_message).await?;
         Ok(())
     }

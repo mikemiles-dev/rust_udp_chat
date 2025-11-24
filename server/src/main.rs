@@ -27,6 +27,8 @@ pub enum ServerCommand {
     Kick(String),
     Rename { old_name: String, new_name: String },
     Ban(IpAddr),
+    /// Session taken over by a new connection - old connection should disconnect silently
+    SessionTakeover(String),
 }
 
 pub struct ChatServer {
@@ -38,6 +40,8 @@ pub struct ChatServer {
     user_ips: Arc<RwLock<HashMap<String, IpAddr>>>,
     /// Maps username to their status message
     user_statuses: Arc<RwLock<HashMap<String, String>>>,
+    /// Maps username to their session token (for reconnection validation)
+    user_sessions: Arc<RwLock<HashMap<String, String>>>,
     /// Set of banned IP addresses
     banned_ips: Arc<RwLock<HashSet<IpAddr>>>,
     max_clients: usize,
@@ -62,6 +66,7 @@ impl ChatServer {
             connected_clients: Arc::new(RwLock::new(HashSet::new())),
             user_ips: Arc::new(RwLock::new(HashMap::new())),
             user_statuses: Arc::new(RwLock::new(HashMap::new())),
+            user_sessions: Arc::new(RwLock::new(HashMap::new())),
             banned_ips: Arc::new(RwLock::new(HashSet::new())),
             max_clients,
             active_connections: Arc::new(AtomicUsize::new(0)),
@@ -116,6 +121,7 @@ impl ChatServer {
                             let connected_clients = self.connected_clients.clone();
                             let user_ips = self.user_ips.clone();
                             let user_statuses = self.user_statuses.clone();
+                            let user_sessions = self.user_sessions.clone();
 
                             tokio::spawn(async move {
                                 // Wrap socket in TLS if configured
@@ -127,7 +133,7 @@ impl ChatServer {
                                     ).await {
                                         Ok(Ok(tls_stream)) => {
                                             let mut client_connection =
-                                                UserConnection::new_tls(tls_stream, addr, tx_clone, cmd_tx_clone, connected_clients, user_ips, user_statuses);
+                                                UserConnection::new_tls(tls_stream, addr, tx_clone, cmd_tx_clone, connected_clients, user_ips, user_statuses, user_sessions);
                                             client_connection.handle().await
                                         }
                                         Ok(Err(e)) => {
@@ -141,7 +147,7 @@ impl ChatServer {
                                     }
                                 } else {
                                     let mut client_connection =
-                                        UserConnection::new(socket, addr, tx_clone, cmd_tx_clone, connected_clients, user_ips, user_statuses);
+                                        UserConnection::new(socket, addr, tx_clone, cmd_tx_clone, connected_clients, user_ips, user_statuses, user_sessions);
                                     client_connection.handle().await
                                 };
 

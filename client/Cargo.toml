@@ -15,3 +15,4 @@ rustyline.workspace = true
 tokio-rustls.workspace = true
 rustls.workspace = true
 webpki-roots.workspace = true
+uuid.workspace = true

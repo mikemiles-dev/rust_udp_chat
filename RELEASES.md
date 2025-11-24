@@ -1,3 +1,6 @@
+# 0.1.12
+ * Ghost session reclaim: Reconnecting clients can now reclaim their own "ghost" session instead of being renamed. If you disconnect and reconnect quickly (before the 60s timeout), and your old session is still active, the server will recognize you and let you take over your username seamlessly.
+
 # 0.1.11
  * Fixed terminal cursor disappearing after `/quit` command.
 

@@ -478,6 +478,7 @@ If the connection to the server is lost, the client automatically attempts to re
 - **Strategy**: Doubles the wait time after each failed attempt (1s → 2s → 4s → 8s → 16s → 32s → 60s)
 - **Preservation**: Your username and last DM sender are preserved across reconnections
 - **Auto-rejoin**: Automatically rejoins the server with the same username when reconnected
+- **Ghost session reclaim**: If your old connection is still "alive" on the server (within 60s timeout), you'll seamlessly reclaim your session without being renamed
 
 Example reconnection sequence:
 ```
@@ -491,6 +492,8 @@ Attempting to reconnect to 127.0.0.1:8080 (attempt 5)...
 Reconnected to server!
 Alice has joined the chat
 ```
+
+**Ghost Session Reclaim**: When you disconnect unexpectedly (network drop, laptop sleep, etc.), your session may still be "alive" on the server for up to 60 seconds until the ping timeout detects it. Previously, reconnecting during this window would give you a renamed username (e.g., `Alice_1234`). Now, the server recognizes it's the same client (via session token and IP matching) and lets you reclaim your original username seamlessly.
 
 ### User Status
 

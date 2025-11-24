@@ -79,10 +79,13 @@ pub struct UserConnection {
     connected_clients: Arc<RwLock<HashSet<String>>>,
     user_ips: Arc<RwLock<HashMap<String, IpAddr>>>,
     user_statuses: Arc<RwLock<HashMap<String, String>>>,
+    user_sessions: Arc<RwLock<HashMap<String, String>>>,
     chat_name: Option<String>,
     rate_limiter: RateLimiter,
     /// True if user explicitly quit (vs connection drop which may be a reconnect)
     clear_status_on_disconnect: bool,
+    /// True if session was taken over by a reconnecting client - don't clean up username
+    session_taken_over: bool,
 }
 
 impl TcpMessageHandler for UserConnection {
@@ -101,6 +104,7 @@ impl UserConnection {
         connected_clients: Arc<RwLock<HashSet<String>>>,
         user_ips: Arc<RwLock<HashMap<String, IpAddr>>>,
         user_statuses: Arc<RwLock<HashMap<String, String>>>,
+        user_sessions: Arc<RwLock<HashMap<String, String>>>,
     ) -> Self {
         UserConnection {
             socket: ConnectionStream::Plain(socket),
@@ -110,9 +114,11 @@ impl UserConnection {
             connected_clients,
             user_ips,
             user_statuses,
+            user_sessions,
             chat_name: None,
             rate_limiter: RateLimiter::new(RATE_LIMIT_MESSAGES, RATE_LIMIT_WINDOW),
             clear_status_on_disconnect: false,
+            session_taken_over: false,
         }
     }
 
@@ -124,6 +130,7 @@ impl UserConnection {
         connected_clients: Arc<RwLock<HashSet<String>>>,
         user_ips: Arc<RwLock<HashMap<String, IpAddr>>>,
         user_statuses: Arc<RwLock<HashMap<String, String>>>,
+        user_sessions: Arc<RwLock<HashMap<String, String>>>,
     ) -> Self {
         UserConnection {
             socket: ConnectionStream::Tls(Box::new(socket)),
@@ -133,9 +140,11 @@ impl UserConnection {
             connected_clients,
             user_ips,
             user_statuses,
+            user_sessions,
             chat_name: None,
             rate_limiter: RateLimiter::new(RATE_LIMIT_MESSAGES, RATE_LIMIT_WINDOW),
             clear_status_on_disconnect: false,
+            session_taken_over: false,
         }
     }
 
@@ -277,6 +286,19 @@ impl UserConnection {
                                 break;
                             }
                         }
+                        Ok(ServerCommand::SessionTakeover(username)) => {
+                            // Another connection is reclaiming this session
+                            if let Some(chat_name) = &self.chat_name
+                                && chat_name == &username {
+                                logger::log_info(&format!(
+                                    "Session for {} taken over by reconnecting client, closing old connection",
+                                    chat_name
+                                ));
+                                // Mark session as taken over - don't clean up username/session on disconnect
+                                self.session_taken_over = true;
+                                break;
+                            }
+                        }
                         Err(_) => {
                             // Channel closed, ignore
                         }
@@ -308,6 +330,16 @@ impl UserConnection {
 
         // Cleanup on disconnect
         if let Some(chat_name) = &self.chat_name {
+            // If session was taken over by a reconnecting client, don't clean up
+            // The new connection now owns the username and session
+            if self.session_taken_over {
+                logger::log_info(&format!(
+                    "Old connection for {} closed (session taken over)",
+                    chat_name
+                ));
+                return Ok(());
+            }
+
             let mut clients = self.connected_clients.write().await;
             clients.remove(chat_name);
             drop(clients);
@@ -317,12 +349,16 @@ impl UserConnection {
             ips.remove(chat_name);
             drop(ips);
 
-            // Only remove status on explicit quit/kick/ban, not on connection drops
+            // Only remove status and session on explicit quit/kick/ban, not on connection drops
             // (which may be reconnection attempts)
             if self.clear_status_on_disconnect {
                 let mut statuses = self.user_statuses.write().await;
                 statuses.remove(chat_name);
                 drop(statuses);
+
+                let mut sessions = self.user_sessions.write().await;
+                sessions.remove(chat_name);
+                drop(sessions);
             }
 
             if let Ok(leave_message) =
@@ -340,9 +376,11 @@ impl UserConnection {
         let handlers = MessageHandlers {
             addr: self.addr,
             tx: &self.tx,
+            server_commands: &self.server_commands,
             connected_clients: &self.connected_clients,
             user_ips: &self.user_ips,
             user_statuses: &self.user_statuses,
+            user_sessions: &self.user_sessions,
         };
 
         handlers
